@@ -24,7 +24,7 @@ from geometry_msgs.msg import (
 )
 
 # [TAMBAHAN] Untuk membaca Airspeed, Groundspeed, Heading, Throttle
-from mavros_msgs.msg import VFR_HUD 
+from mavros_msgs.msg import VfrHud 
 
 from std_msgs.msg import String
 
@@ -150,7 +150,7 @@ class MissionAnalyzer(Node):
 
         # [TAMBAHAN] Subscriber untuk HUD (Angin, Heading, Airspeed)
         self.create_subscription(
-            VFR_HUD,
+            VfrHud,
             "/mavros/vfr_hud",
             self.vfr_callback,
             qos_sensor
