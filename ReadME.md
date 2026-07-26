@@ -112,7 +112,7 @@ ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:57600
 
 - (Opsional) Jika ingin dihubungkan dengan Ground Control System (GCS) seperti Mission Planner atau QGroundControl, dapat menambahkan gcs_url:
 ```Bash
-ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:115200 gcs_url:="udp://@10.72.40.76:14550"
+ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:115200 gcs_url:="udp://@(IP_LAPTOP):14550"
 ```
 - Menyalakan Driver ZED 2i:
 ```Bash
