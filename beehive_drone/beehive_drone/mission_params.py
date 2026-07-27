@@ -42,8 +42,8 @@ class MissionConfig:
     KP_XY = 0.5                  # Gain Proposional Translasi
     KP_Z = 0.3                   # Gain Proposional Ketinggian
     KP_YAW = 0.8                 # Gain Proposional Rotasi
-    MAX_VELOCITY_XY = 0.2        # m/s defual 1.0
-    MAX_VELOCITY_Z = 0.15         # m/s 0.5
+    MAX_VELOCITY_XY = 1.5        # m/s defual 1.0
+    MAX_VELOCITY_Z = 0.5         # m/s 0.5
     MAX_VELOCITY_YAW = 0.5       # rad/s
     GOAL_THRESHOLD = 0.5         # meter
 
