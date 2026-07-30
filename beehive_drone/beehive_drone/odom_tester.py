@@ -24,7 +24,7 @@ class OdomTester(Node):
         # Konfigurasi Misi Uji
         # ==========================================
         self.alt_target = 2.0      # Ketinggian 2 meter
-        self.hover_duration = 5.0  # Waktu jeda/hovering/loiter (5 detik)
+        self.hover_duration = 5.0  # Waktu jeda di setiap titik (5 detik)
         self.dist_tolerance = 0.3  # Toleransi jarak sampai titik (meter)
         
         self.current_pose = None
@@ -36,16 +36,16 @@ class OdomTester(Node):
         self.target_pose.header.frame_id = "odom"
         
         self.hover_start_time = 0.0
-        self.loiter_start_time = 0.0  # Timer khusus untuk mode Loiter
+        self.orbit_start_time = 0.0  # Timer khusus untuk Orbit
         self.retry_counter = 0
 
-        # Variabel Telemetri dari Flight Manager
+        # Variabel Telemetri
         self.is_armed = False
         self.current_mode = ""
         self.is_hovering = False
 
         # ==========================================
-        # ROS 2 Interfaces (Menggunakan Flight Manager)
+        # ROS 2 Interfaces
         # ==========================================
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -68,7 +68,7 @@ class OdomTester(Node):
         # Loop Kontrol Utama (20 Hz)
         self.timer = self.create_timer(0.05, self.control_loop)
         
-        self.get_logger().info("Odom Tester (via Flight Manager) Aktif.")
+        self.get_logger().info("Odom Tester (Manuver Orbit) Aktif.")
 
     # --- Callbacks ---
     def pose_cb(self, msg): self.current_pose = msg
@@ -76,7 +76,6 @@ class OdomTester(Node):
     def mode_cb(self, msg): self.current_mode = msg.data
     def hover_cb(self, msg): self.is_hovering = msg.data
 
-    # --- Fungsi Perhitungan Jarak ---
     def distance_to_target(self):
         if not self.current_pose: return float('inf')
         dx = self.target_pose.pose.position.x - self.current_pose.pose.position.x
@@ -85,7 +84,7 @@ class OdomTester(Node):
         return math.sqrt(dx*dx + dy*dy + dz*dz)
 
     def trigger_hover(self, next_step_name):
-        self.get_logger().info(f"Titik tercapai. Hovering (GUIDED) {self.hover_duration} detik...")
+        self.get_logger().info(f"Titik tercapai. Menahan posisi {self.hover_duration} detik...")
         self.hover_start_time = time.time()
         self.next_step_after_hover = next_step_name
         self.step = "HOVERING"
@@ -94,28 +93,17 @@ class OdomTester(Node):
         if self.current_pose is None:
             return
 
-        # ========================================================
-        # FITUR SAFETY: DETEKSI PENGAMBILALIHAN OLEH REMOTE (RC)
-        # ========================================================
+        # FITUR SAFETY (PENGAMBILALIHAN MANUAL OLEH PILOT)
         if self.step not in ["INIT", "DONE", "MANUAL_OVERRIDE"]:
-            # Jika kita sedang di blok LOITER buatan Jetson, mode LOITER diizinkan.
-            if self.step in ["GANTI_LOITER", "SEDANG_LOITER", "KEMBALI_GUIDED"]:
-                allowed_modes = ["GUIDED", "LOITER", ""]
-            else:
-                allowed_modes = ["GUIDED", ""]
-
-            if self.current_mode not in allowed_modes:
-                self.get_logger().warn(f"PENGAMBILALIHAN RC DETEKSI! Mode berubah ke {self.current_mode}.")
-                self.get_logger().warn("Misi Jetson DIBATALKAN. Kendali 100% di tangan Pilot.")
+            if self.current_mode not in ["GUIDED", ""]:
+                self.get_logger().warn(f"PENGAMBILALIHAN RC DETEKSI! Mode: {self.current_mode}.")
                 self.step = "MANUAL_OVERRIDE"
 
         if self.step == "MANUAL_OVERRIDE":
             return
-        # ========================================================
 
-        # Selalu publish setpoint selama tidak di darat, mendarat, manual, atau sedang LOITER
-        tidak_perlu_setpoint = ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF", "LAND", "DONE", "MANUAL_OVERRIDE", "SEDANG_LOITER"]
-        if self.step not in tidak_perlu_setpoint:
+        # Publikasikan setpoint konstan kecuali saat di tanah / sedang mendarat
+        if self.step not in ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF", "LAND", "DONE", "MANUAL_OVERRIDE"]:
             self.target_pose.header.stamp = self.get_clock().now().to_msg()
             self.setpoint_pub.publish(self.target_pose)
 
@@ -126,7 +114,6 @@ class OdomTester(Node):
             if self.retry_counter % 20 == 0:
                 mode_msg = String(); mode_msg.data = "GUIDED"
                 self.cmd_mode_pub.publish(mode_msg)
-                
             if self.current_mode == "GUIDED":
                 self.step = "ARMING"
                 self.retry_counter = 0
@@ -136,11 +123,9 @@ class OdomTester(Node):
             if self.retry_counter % 20 == 0:
                 arm_msg = Bool(); arm_msg.data = True
                 self.cmd_arm_pub.publish(arm_msg)
-                
             if self.is_armed:
                 self.get_logger().info("Armed! Bersiap Takeoff...")
                 
-                # Simpan pose awal (X, Y, dan Yaw asli)
                 self.start_pose = self.current_pose.pose
                 self.start_x = self.start_pose.position.x
                 self.start_y = self.start_pose.position.y
@@ -157,12 +142,11 @@ class OdomTester(Node):
         elif self.step == "TAKEOFF":
             takeoff_msg = Float32(); takeoff_msg.data = self.alt_target
             self.cmd_takeoff_pub.publish(takeoff_msg)
-            self.get_logger().info(f"Eksekusi Takeoff ke {self.alt_target}m...")
+            self.get_logger().info(f"Takeoff ke {self.alt_target}m...")
             self.step = "WAIT_TAKEOFF"
 
         elif self.step == "WAIT_TAKEOFF":
             if self.is_hovering:
-                self.get_logger().info("Hovering stabil pasca-takeoff tercapai.")
                 self.trigger_hover("KIRI_2M")
 
         elif self.step == "HOVERING":
@@ -170,88 +154,92 @@ class OdomTester(Node):
                 self.step = self.next_step_after_hover
                 self.get_logger().info(f"Mulai manuver: {self.step}")
 
-        # --- BLOK MANUVER PERGERAKAN ---
+        # --- BLOK MANUVER LURUS ---
         elif self.step == "KIRI_2M":
-            # Geser ke Kiri (Sumbu Y positif)
             self.target_pose.pose.position.x = self.start_x
             self.target_pose.pose.position.y = self.start_y + 2.0
-            
             if self.distance_to_target() < self.dist_tolerance:
                 self.trigger_hover("DEPAN_1M")
 
         elif self.step == "DEPAN_1M":
-            # Maju ke Depan (Sumbu X positif), Y tetap di Kiri
             self.target_pose.pose.position.x = self.start_x + 1.0
             self.target_pose.pose.position.y = self.start_y + 2.0
-            
             if self.distance_to_target() < self.dist_tolerance:
-                self.get_logger().info("Titik Depan tercapai. Sengaja ganti ke mode LOITER...")
-                self.step = "GANTI_LOITER"
-                self.retry_counter = 0
+                self.trigger_hover("MULAI_ORBIT")
 
-        # === BLOK LOITER KHUSUS ===
-        elif self.step == "GANTI_LOITER":
-            if self.retry_counter % 20 == 0:
-                mode_msg = String(); mode_msg.data = "LOITER"
-                self.cmd_mode_pub.publish(mode_msg)
+        # === BLOK ORBIT (LINGKARAN PENUH) ===
+        elif self.step == "MULAI_ORBIT":
+            self.get_logger().info("Memulai Orbit Radius 0.5m...")
+            self.orbit_start_time = time.time()
+            self.step = "ORBIT"
+            
+        elif self.step == "ORBIT":
+            radius = 0.5
+            # Titik Pusat Lingkaran (0.5 meter di depan drone saat ini)
+            cx = self.start_x + 1.5
+            cy = self.start_y + 2.0
+            
+            elapsed = time.time() - self.orbit_start_time
+            angular_speed = 0.5  # Kecepatan putar (Radian per detik). ~12.5 detik utk 1 putaran penuh.
+            
+            # Dimulai dari Pi (180 derajat) agar titik awal orbit mulus tanpa lompat posisi
+            theta = math.pi + (elapsed * angular_speed) 
+            
+            # Hitung koordinat X dan Y pada lingkaran
+            orbit_x = cx + radius * math.cos(theta)
+            orbit_y = cy + radius * math.sin(theta)
+            
+            # Hitung arah kepala drone (Yaw) agar kamera selalu menatap ke pusat lingkaran
+            orbit_yaw = math.atan2(cy - orbit_y, cx - orbit_x)
+            
+            self.target_pose.pose.position.x = orbit_x
+            self.target_pose.pose.position.y = orbit_y
+            
+            # Masukkan nilai Yaw baru ke Quaternion
+            qx, qy, qz, qw = euler_to_quaternion(0, 0, orbit_yaw)
+            self.target_pose.pose.orientation.x = qx
+            self.target_pose.pose.orientation.y = qy
+            self.target_pose.pose.orientation.z = qz
+            self.target_pose.pose.orientation.w = qw
+            
+            # Cek apakah sudah berputar sejauh 360 derajat (2 * Pi)
+            if elapsed * angular_speed >= 2 * math.pi:
+                self.get_logger().info("Orbit 360 derajat selesai!")
                 
-            if self.current_mode == "LOITER":
-                self.get_logger().info(f"Mode LOITER aktif! Menahan posisi selama {self.hover_duration} detik...")
-                self.loiter_start_time = time.time()
-                self.step = "SEDANG_LOITER"
-            self.retry_counter += 1
-
-        elif self.step == "SEDANG_LOITER":
-            if time.time() - self.loiter_start_time > self.hover_duration:
-                self.get_logger().info("Waktu Loiter selesai. Kembali ke GUIDED...")
-                self.step = "KEMBALI_GUIDED"
-                self.retry_counter = 0
+                # Kunci posisinya tepat di titik asal sebelum mulai orbit
+                self.target_pose.pose.position.x = self.start_x + 1.0
+                self.target_pose.pose.position.y = self.start_y + 2.0
                 
-        elif self.step == "KEMBALI_GUIDED":
-            # Publish setpoint kembali agar Ardupilot mau masuk GUIDED
-            self.target_pose.header.stamp = self.get_clock().now().to_msg()
-            self.setpoint_pub.publish(self.target_pose)
-
-            if self.retry_counter % 20 == 0:
-                mode_msg = String(); mode_msg.data = "GUIDED"
-                self.cmd_mode_pub.publish(mode_msg)
+                # Kembalikan hadap kepala drone (Yaw) ke arah semula
+                self.target_pose.pose.orientation = self.start_pose.orientation
                 
-            if self.current_mode == "GUIDED":
-                self.get_logger().info("Kembali ke GUIDED berhasil! Melanjutkan mundur 1 meter...")
-                self.step = "BELAKANG_1M"
-            self.retry_counter += 1
-        # ==========================
+                # Jeda sejenak sebelum mundur
+                self.trigger_hover("BELAKANG_1M")
+        # ====================================
 
         elif self.step == "BELAKANG_1M":
-            # Mundur ke Belakang (Kembali ke X awal), Y tetap di Kiri
             self.target_pose.pose.position.x = self.start_x
             self.target_pose.pose.position.y = self.start_y + 2.0
-            
             if self.distance_to_target() < self.dist_tolerance:
                 self.trigger_hover("KANAN_2M")
                 
         elif self.step == "KANAN_2M":
-            # Geser ke Kanan (Kembali ke Y awal / Titik Home)
             self.target_pose.pose.position.x = self.start_x
             self.target_pose.pose.position.y = self.start_y
-            
             if self.distance_to_target() < self.dist_tolerance:
                 self.trigger_hover("LAND")
-        # ----------------------------
 
         elif self.step == "LAND":
             land_msg = Bool(); land_msg.data = True
             self.cmd_land_pub.publish(land_msg)
             self.step = "DONE"
-            self.get_logger().info("Mode pendaratan dikirim via Flight Manager. Uji coba SELESAI.")
+            self.get_logger().info("Pendaratan dikirim. Misi Selesai.")
 
 def main(args=None):
     rclpy.init(args=args)
     node = OdomTester()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
+    try: rclpy.spin(node)
+    except KeyboardInterrupt: pass
     finally:
         node.destroy_node()
         rclpy.shutdown()
