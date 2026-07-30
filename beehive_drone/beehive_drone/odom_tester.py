@@ -23,9 +23,9 @@ class OdomTester(Node):
         # ==========================================
         # Konfigurasi Misi Uji
         # ==========================================
-        self.alt_target = 3.0
-        self.hover_duration = 4.0 
-        self.dist_tolerance = 0.3 
+        self.alt_target = 2.0      # Ketinggian 2 meter
+        self.hover_duration = 5.0  # Waktu hovering di setiap titik (5 detik)
+        self.dist_tolerance = 0.3  # Toleransi jarak sampai titik (meter)
         
         self.current_pose = None
         self.start_x = 0.0
@@ -36,7 +36,6 @@ class OdomTester(Node):
         self.target_pose.header.frame_id = "odom"
         
         self.hover_start_time = 0.0
-        self.orbit_start_time = 0.0
         self.retry_counter = 0
 
         # Variabel Telemetri dari Flight Manager
@@ -53,16 +52,13 @@ class OdomTester(Node):
             depth=10
         )
 
-        # MAVROS Pose (Hanya untuk baca koordinat aktual & kirim Setpoint navigasi)
         self.pose_sub = self.create_subscription(PoseStamped, "/mavros/local_position/pose", self.pose_cb, qos_sensor)
         self.setpoint_pub = self.create_publisher(PoseStamped, "/mavros/setpoint_position/local", 10)
 
-        # TELEMETRI SUBSCRIBER (Dari Flight Manager)
         self.telemetry_arm_sub = self.create_subscription(Bool, "/flight/telemetry/is_armed", self.arm_cb, 10)
         self.telemetry_mode_sub = self.create_subscription(String, "/flight/telemetry/current_mode", self.mode_cb, 10)
         self.telemetry_hover_sub = self.create_subscription(Bool, "/flight/telemetry/is_hovering", self.hover_cb, 10)
 
-        # COMMAND PUBLISHER (Ke Flight Manager)
         self.cmd_mode_pub = self.create_publisher(String, "/flight/cmd/set_mode", 10)
         self.cmd_arm_pub = self.create_publisher(Bool, "/flight/cmd/set_arm", 10)
         self.cmd_takeoff_pub = self.create_publisher(Float32, "/flight/cmd/takeoff", 10)
@@ -79,23 +75,13 @@ class OdomTester(Node):
     def mode_cb(self, msg): self.current_mode = msg.data
     def hover_cb(self, msg): self.is_hovering = msg.data
 
+    # --- Fungsi Perhitungan Jarak ---
     def distance_to_target(self):
         if not self.current_pose: return float('inf')
         dx = self.target_pose.pose.position.x - self.current_pose.pose.position.x
         dy = self.target_pose.pose.position.y - self.current_pose.pose.position.y
         dz = self.target_pose.pose.position.z - self.current_pose.pose.position.z
         return math.sqrt(dx*dx + dy*dy + dz*dz)
-
-    def set_target(self, x, y, z, yaw=0.0):
-        self.target_pose.pose.position.x = float(x)
-        self.target_pose.pose.position.y = float(y)
-        self.target_pose.pose.position.z = float(z)
-        
-        qx, qy, qz, qw = euler_to_quaternion(0, 0, yaw)
-        self.target_pose.pose.orientation.x = qx
-        self.target_pose.pose.orientation.y = qy
-        self.target_pose.pose.orientation.z = qz
-        self.target_pose.pose.orientation.w = qw
 
     def trigger_hover(self, next_step_name):
         self.get_logger().info(f"Titik tercapai. Hovering {self.hover_duration} detik...")
@@ -107,12 +93,27 @@ class OdomTester(Node):
         if self.current_pose is None:
             return
 
-        # WAJIB: Selalu publikasikan setpoint MAVROS 20Hz agar mode GUIDED tidak terputus.
-        if self.step not in ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF"]:
+        # ========================================================
+        # FITUR SAFETY: DETEKSI PENGAMBILALIHAN OLEH REMOTE (RC)
+        # ========================================================
+        if self.step not in ["INIT", "DONE", "MANUAL_OVERRIDE"]:
+            if self.current_mode not in ["GUIDED", ""]:
+                self.get_logger().warn(f"PENGAMBILALIHAN RC DETEKSI! Mode berubah ke {self.current_mode}.")
+                self.get_logger().warn("Misi Jetson DIBATALKAN. Kendali 100% di tangan Pilot.")
+                self.step = "MANUAL_OVERRIDE"
+
+        if self.step == "MANUAL_OVERRIDE":
+            return
+        # ========================================================
+
+        # Selalu publish setpoint selama tidak di darat, sedang mendarat, atau manual
+        if self.step not in ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF", "LAND", "DONE", "MANUAL_OVERRIDE"]:
             self.target_pose.header.stamp = self.get_clock().now().to_msg()
             self.setpoint_pub.publish(self.target_pose)
 
-        # Logic Berdasarkan Sekuens FSM
+        # ========================================================
+        # STATE MACHINE (FSM)
+        # ========================================================
         if self.step == "INIT":
             if self.retry_counter % 20 == 0:
                 mode_msg = String(); mode_msg.data = "GUIDED"
@@ -132,11 +133,17 @@ class OdomTester(Node):
                 
             if self.is_armed:
                 self.get_logger().info("Armed! Bersiap Takeoff...")
-                self.start_x = self.current_pose.pose.position.x
-                self.start_y = self.current_pose.pose.position.y
                 
-                # Kunci setpoint ke Z=3.0m agar takeoff tidak dilawan oleh perintah Z=0
-                self.set_target(self.start_x, self.start_y, self.alt_target)
+                # Simpan pose awal (X, Y, dan Yaw asli)
+                self.start_pose = self.current_pose.pose
+                self.start_x = self.start_pose.position.x
+                self.start_y = self.start_pose.position.y
+                
+                self.target_pose.pose.position.x = self.start_x
+                self.target_pose.pose.position.y = self.start_y
+                self.target_pose.pose.position.z = self.alt_target
+                self.target_pose.pose.orientation = self.start_pose.orientation
+                
                 self.step = "TAKEOFF"
                 self.retry_counter = 0
             self.retry_counter += 1
@@ -148,62 +155,48 @@ class OdomTester(Node):
             self.step = "WAIT_TAKEOFF"
 
         elif self.step == "WAIT_TAKEOFF":
-            # Memanfaatkan logika Hover cerdas milik Flight Manager
             if self.is_hovering:
                 self.get_logger().info("Hovering stabil pasca-takeoff tercapai.")
-                self.set_target(self.start_x, self.start_y, self.alt_target)
-                self.trigger_hover("MAJU_3M")
+                self.trigger_hover("KIRI_2M")
 
         elif self.step == "HOVERING":
             if time.time() - self.hover_start_time > self.hover_duration:
                 self.step = self.next_step_after_hover
                 self.get_logger().info(f"Mulai manuver: {self.step}")
 
-        elif self.step == "MAJU_3M":
-            self.set_target(self.start_x + 3.0, self.start_y, self.alt_target)
-            if self.distance_to_target() < self.dist_tolerance:
-                self.trigger_hover("KIRI_3M")
-
-        elif self.step == "KIRI_3M":
-            self.set_target(self.start_x + 3.0, self.start_y + 3.0, self.alt_target)
-            if self.distance_to_target() < self.dist_tolerance:
-                self.trigger_hover("KANAN_3M")
-
-        elif self.step == "KANAN_3M":
-            self.set_target(self.start_x + 3.0, self.start_y - 3.0, self.alt_target)
-            if self.distance_to_target() < self.dist_tolerance:
-                self.trigger_hover("MUNDUR_3M")
-
-        elif self.step == "MUNDUR_3M":
-            self.set_target(self.start_x, self.start_y, self.alt_target)
-            if self.distance_to_target() < self.dist_tolerance:
-                self.trigger_hover("MAJU_LAGI_3M")
-
-        elif self.step == "MAJU_LAGI_3M":
-            self.set_target(self.start_x + 3.0, self.start_y, self.alt_target)
-            if self.distance_to_target() < self.dist_tolerance:
-                self.get_logger().info("Titik tengah tercapai. Memulai manuver Orbit...")
-                self.orbit_start_time = time.time()
-                self.step = "ORBIT_TEST"
-
-        elif self.step == "ORBIT_TEST":
-            radius = 2.0
-            cx = self.start_x + 3.0
-            cy = self.start_y + radius 
+        # --- BLOK MANUVER TERBARU ---
+        elif self.step == "KIRI_2M":
+            # Geser ke Kiri (Sumbu Y positif)
+            self.target_pose.pose.position.x = self.start_x
+            self.target_pose.pose.position.y = self.start_y + 2.0
             
-            elapsed = time.time() - self.orbit_start_time
-            angular_speed = 0.5 
-            theta = -math.pi/2 + (elapsed * angular_speed)
+            if self.distance_to_target() < self.dist_tolerance:
+                self.trigger_hover("DEPAN_1M")
+
+        elif self.step == "DEPAN_1M":
+            # Maju ke Depan (Sumbu X positif), Y tetap di posisi Kiri 2m
+            self.target_pose.pose.position.x = self.start_x + 1.0
+            self.target_pose.pose.position.y = self.start_y + 2.0
             
-            orbit_x = cx + radius * math.cos(theta)
-            orbit_y = cy + radius * math.sin(theta)
-            orbit_yaw = math.atan2(cy - orbit_y, cx - orbit_x)
+            if self.distance_to_target() < self.dist_tolerance:
+                self.trigger_hover("BELAKANG_1M")
+
+        elif self.step == "BELAKANG_1M":
+            # Mundur ke Belakang (Kembali ke X awal), Y tetap di Kiri 2m
+            self.target_pose.pose.position.x = self.start_x
+            self.target_pose.pose.position.y = self.start_y + 2.0
             
-            self.set_target(orbit_x, orbit_y, self.alt_target, yaw=orbit_yaw)
+            if self.distance_to_target() < self.dist_tolerance:
+                self.trigger_hover("KANAN_2M")
+                
+        elif self.step == "KANAN_2M":
+            # Geser ke Kanan (Kembali ke Y awal / Titik Home), X tetap di X awal
+            self.target_pose.pose.position.x = self.start_x
+            self.target_pose.pose.position.y = self.start_y
             
-            if elapsed * angular_speed >= 2 * math.pi:
-                self.get_logger().info("Orbit 360 derajat selesai. Meminta Pendaratan...")
-                self.step = "LAND"
+            if self.distance_to_target() < self.dist_tolerance:
+                self.trigger_hover("LAND")
+        # ----------------------------
 
         elif self.step == "LAND":
             land_msg = Bool(); land_msg.data = True
