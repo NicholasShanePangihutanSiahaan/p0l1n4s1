@@ -24,7 +24,7 @@ class OdomTester(Node):
         # Konfigurasi Misi Uji
         # ==========================================
         self.alt_target = 2.0      # Ketinggian 2 meter
-        self.hover_duration = 5.0  # Waktu hovering di setiap titik (5 detik)
+        self.hover_duration = 5.0  # Waktu jeda/hovering/loiter (5 detik)
         self.dist_tolerance = 0.3  # Toleransi jarak sampai titik (meter)
         
         self.current_pose = None
@@ -36,6 +36,7 @@ class OdomTester(Node):
         self.target_pose.header.frame_id = "odom"
         
         self.hover_start_time = 0.0
+        self.loiter_start_time = 0.0  # Timer khusus untuk mode Loiter
         self.retry_counter = 0
 
         # Variabel Telemetri dari Flight Manager
@@ -84,7 +85,7 @@ class OdomTester(Node):
         return math.sqrt(dx*dx + dy*dy + dz*dz)
 
     def trigger_hover(self, next_step_name):
-        self.get_logger().info(f"Titik tercapai. Hovering {self.hover_duration} detik...")
+        self.get_logger().info(f"Titik tercapai. Hovering (GUIDED) {self.hover_duration} detik...")
         self.hover_start_time = time.time()
         self.next_step_after_hover = next_step_name
         self.step = "HOVERING"
@@ -97,7 +98,13 @@ class OdomTester(Node):
         # FITUR SAFETY: DETEKSI PENGAMBILALIHAN OLEH REMOTE (RC)
         # ========================================================
         if self.step not in ["INIT", "DONE", "MANUAL_OVERRIDE"]:
-            if self.current_mode not in ["GUIDED", ""]:
+            # Jika kita sedang di blok LOITER buatan Jetson, mode LOITER diizinkan.
+            if self.step in ["GANTI_LOITER", "SEDANG_LOITER", "KEMBALI_GUIDED"]:
+                allowed_modes = ["GUIDED", "LOITER", ""]
+            else:
+                allowed_modes = ["GUIDED", ""]
+
+            if self.current_mode not in allowed_modes:
                 self.get_logger().warn(f"PENGAMBILALIHAN RC DETEKSI! Mode berubah ke {self.current_mode}.")
                 self.get_logger().warn("Misi Jetson DIBATALKAN. Kendali 100% di tangan Pilot.")
                 self.step = "MANUAL_OVERRIDE"
@@ -106,8 +113,9 @@ class OdomTester(Node):
             return
         # ========================================================
 
-        # Selalu publish setpoint selama tidak di darat, sedang mendarat, atau manual
-        if self.step not in ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF", "LAND", "DONE", "MANUAL_OVERRIDE"]:
+        # Selalu publish setpoint selama tidak di darat, mendarat, manual, atau sedang LOITER
+        tidak_perlu_setpoint = ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF", "LAND", "DONE", "MANUAL_OVERRIDE", "SEDANG_LOITER"]
+        if self.step not in tidak_perlu_setpoint:
             self.target_pose.header.stamp = self.get_clock().now().to_msg()
             self.setpoint_pub.publish(self.target_pose)
 
@@ -118,7 +126,6 @@ class OdomTester(Node):
             if self.retry_counter % 20 == 0:
                 mode_msg = String(); mode_msg.data = "GUIDED"
                 self.cmd_mode_pub.publish(mode_msg)
-                self.get_logger().info("Meminta mode GUIDED via Flight Manager...")
                 
             if self.current_mode == "GUIDED":
                 self.step = "ARMING"
@@ -129,7 +136,6 @@ class OdomTester(Node):
             if self.retry_counter % 20 == 0:
                 arm_msg = Bool(); arm_msg.data = True
                 self.cmd_arm_pub.publish(arm_msg)
-                self.get_logger().info("Meminta Arming via Flight Manager...")
                 
             if self.is_armed:
                 self.get_logger().info("Armed! Bersiap Takeoff...")
@@ -164,7 +170,7 @@ class OdomTester(Node):
                 self.step = self.next_step_after_hover
                 self.get_logger().info(f"Mulai manuver: {self.step}")
 
-        # --- BLOK MANUVER TERBARU ---
+        # --- BLOK MANUVER PERGERAKAN ---
         elif self.step == "KIRI_2M":
             # Geser ke Kiri (Sumbu Y positif)
             self.target_pose.pose.position.x = self.start_x
@@ -174,15 +180,50 @@ class OdomTester(Node):
                 self.trigger_hover("DEPAN_1M")
 
         elif self.step == "DEPAN_1M":
-            # Maju ke Depan (Sumbu X positif), Y tetap di posisi Kiri 2m
+            # Maju ke Depan (Sumbu X positif), Y tetap di Kiri
             self.target_pose.pose.position.x = self.start_x + 1.0
             self.target_pose.pose.position.y = self.start_y + 2.0
             
             if self.distance_to_target() < self.dist_tolerance:
-                self.trigger_hover("BELAKANG_1M")
+                self.get_logger().info("Titik Depan tercapai. Sengaja ganti ke mode LOITER...")
+                self.step = "GANTI_LOITER"
+                self.retry_counter = 0
+
+        # === BLOK LOITER KHUSUS ===
+        elif self.step == "GANTI_LOITER":
+            if self.retry_counter % 20 == 0:
+                mode_msg = String(); mode_msg.data = "LOITER"
+                self.cmd_mode_pub.publish(mode_msg)
+                
+            if self.current_mode == "LOITER":
+                self.get_logger().info(f"Mode LOITER aktif! Menahan posisi selama {self.hover_duration} detik...")
+                self.loiter_start_time = time.time()
+                self.step = "SEDANG_LOITER"
+            self.retry_counter += 1
+
+        elif self.step == "SEDANG_LOITER":
+            if time.time() - self.loiter_start_time > self.hover_duration:
+                self.get_logger().info("Waktu Loiter selesai. Kembali ke GUIDED...")
+                self.step = "KEMBALI_GUIDED"
+                self.retry_counter = 0
+                
+        elif self.step == "KEMBALI_GUIDED":
+            # Publish setpoint kembali agar Ardupilot mau masuk GUIDED
+            self.target_pose.header.stamp = self.get_clock().now().to_msg()
+            self.setpoint_pub.publish(self.target_pose)
+
+            if self.retry_counter % 20 == 0:
+                mode_msg = String(); mode_msg.data = "GUIDED"
+                self.cmd_mode_pub.publish(mode_msg)
+                
+            if self.current_mode == "GUIDED":
+                self.get_logger().info("Kembali ke GUIDED berhasil! Melanjutkan mundur 1 meter...")
+                self.step = "BELAKANG_1M"
+            self.retry_counter += 1
+        # ==========================
 
         elif self.step == "BELAKANG_1M":
-            # Mundur ke Belakang (Kembali ke X awal), Y tetap di Kiri 2m
+            # Mundur ke Belakang (Kembali ke X awal), Y tetap di Kiri
             self.target_pose.pose.position.x = self.start_x
             self.target_pose.pose.position.y = self.start_y + 2.0
             
@@ -190,7 +231,7 @@ class OdomTester(Node):
                 self.trigger_hover("KANAN_2M")
                 
         elif self.step == "KANAN_2M":
-            # Geser ke Kanan (Kembali ke Y awal / Titik Home), X tetap di X awal
+            # Geser ke Kanan (Kembali ke Y awal / Titik Home)
             self.target_pose.pose.position.x = self.start_x
             self.target_pose.pose.position.y = self.start_y
             
