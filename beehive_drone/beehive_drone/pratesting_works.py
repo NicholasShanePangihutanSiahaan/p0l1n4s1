@@ -98,13 +98,21 @@ class OdomTester(Node):
     def control_loop(self):
         if self.current_pose is None:
             return
+        if self.step not in ["INIT", "DONE", "MANUAL_OVERRIDE"]:
+            if self.current_mode not in ["GUIDED", ""]:
+                self.get_logger().warn(f"PENGAMBILALIHAN RC DETEKSI! Mode berubah ke {self.current_mode}.")
+                self.get_logger().warn("Misi Jetson DIBATALKAN. Kendali 100% di tangan Pilot.")
+                self.step = "MANUAL_OVERRIDE"
 
-        # WAJIB: Selalu publikasikan setpoint MAVROS 20Hz agar mode GUIDED tidak terputus.
-        if self.step not in ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF"]:
+        # Jika pilot sudah mengambil alih, hentikan semua perintah Jetson
+        if self.step == "MANUAL_OVERRIDE":
+            return
+
+        # 1. PERBAIKAN: Hentikan pengiriman setpoint saat LAND dan DONE
+        if self.step not in ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF", "LAND", "DONE"]:
             self.target_pose.header.stamp = self.get_clock().now().to_msg()
             self.setpoint_pub.publish(self.target_pose)
 
-        # Logic Berdasarkan Sekuens FSM
         if self.step == "INIT":
             if self.retry_counter % 20 == 0:
                 mode_msg = String(); mode_msg.data = "GUIDED"
@@ -124,11 +132,18 @@ class OdomTester(Node):
                 
             if self.is_armed:
                 self.get_logger().info("Armed! Bersiap Takeoff...")
-                self.start_x = self.current_pose.pose.position.x
-                self.start_y = self.current_pose.pose.position.y
                 
-                # Kunci setpoint ke ketinggian target agar takeoff tidak dilawan
-                self.set_target(self.start_x, self.start_y, self.alt_target)
+                # 2. PERBAIKAN: Simpan seluruh Pose saat Arming (termasuk Yaw/Orientasi asli)
+                self.start_pose = self.current_pose.pose
+                self.start_x = self.start_pose.position.x
+                self.start_y = self.start_pose.position.y
+                
+                # Menggunakan orientasi asli agar drone tidak mendadak berputar
+                self.target_pose.pose.position.x = self.start_x
+                self.target_pose.pose.position.y = self.start_y
+                self.target_pose.pose.position.z = self.alt_target
+                self.target_pose.pose.orientation = self.start_pose.orientation
+                
                 self.step = "TAKEOFF"
                 self.retry_counter = 0
             self.retry_counter += 1
@@ -140,11 +155,9 @@ class OdomTester(Node):
             self.step = "WAIT_TAKEOFF"
 
         elif self.step == "WAIT_TAKEOFF":
-            # Memanfaatkan logika Hover cerdas milik Flight Manager
             if self.is_hovering:
                 self.get_logger().info("Hovering stabil pasca-takeoff tercapai.")
-                self.set_target(self.start_x, self.start_y, self.alt_target)
-                # Langsung ke mode LAND setelah hover selesai
+                # Target tidak perlu diubah lagi karena sudah di-set saat ARMING
                 self.trigger_hover("LAND")
 
         elif self.step == "HOVERING":
@@ -153,6 +166,7 @@ class OdomTester(Node):
                 self.get_logger().info(f"Mulai manuver: {self.step}")
 
         elif self.step == "LAND":
+            # Setpoint_pub sudah tidak aktif di sini karena pengecualian di baris teratas
             land_msg = Bool(); land_msg.data = True
             self.cmd_land_pub.publish(land_msg)
             self.step = "DONE"
