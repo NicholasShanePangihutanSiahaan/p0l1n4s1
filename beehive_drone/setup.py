@@ -33,7 +33,8 @@ setup(
             'tree_localizer = beehive_drone.tree_localizer:main',
             'flight_manager = beehive_drone.flight_manager:main',
             'mission_analyzer = beehive_drone.mission_analyzer:main',
-            'pratesting_works = beehive_drone.pratesting_works:main'
+            'pratesting_works = beehive_drone.pratesting_works:main',
+            'odom_tester = beehive_drone.odom_tester:main',
         ],
     },
 )   
