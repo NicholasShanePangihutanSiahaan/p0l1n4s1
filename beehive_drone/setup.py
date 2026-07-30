@@ -34,7 +34,9 @@ setup(
             'flight_manager = beehive_drone.flight_manager:main',
             'mission_analyzer = beehive_drone.mission_analyzer:main',
             'pratesting_works = beehive_drone.pratesting_works:main',
+            'vision_to_mavros = beehive_drone.vision_to_mavros:main',
             'odom_tester = beehive_drone.odom_tester:main',
+            'tes_kiri_kanan = beehive_drone.tes_kiri_kanan:main',
         ],
     },
 )   

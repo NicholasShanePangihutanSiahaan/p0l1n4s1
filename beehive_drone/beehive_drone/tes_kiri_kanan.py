@@ -107,7 +107,7 @@ class OdomTester(Node):
         # ========================================================
 
         # Selalu publish setpoint selama tidak di darat, sedang mendarat, atau manual
-        if self.step not in ["INIT", "ARMING", "LAND", "DONE", "MANUAL_OVERRIDE"]:
+        if self.step not in ["INIT", "ARMING", "TAKEOFF", "WAIT_TAKEOFF", "LAND", "DONE", "MANUAL_OVERRIDE"]:
             self.target_pose.header.stamp = self.get_clock().now().to_msg()
             self.setpoint_pub.publish(self.target_pose)
 
