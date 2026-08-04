@@ -37,6 +37,7 @@ setup(
             'vision_to_mavros = beehive_drone.vision_to_mavros:main',
             'odom_tester = beehive_drone.odom_tester:main',
             'tes_kiri_kanan = beehive_drone.tes_kiri_kanan:main',
+            'mission_state_machine_single_tree = beehive_drone.mission_state_machine_single_tree:main',
         ],
     },
 )   

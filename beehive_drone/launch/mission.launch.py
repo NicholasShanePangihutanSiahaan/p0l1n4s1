@@ -67,8 +67,8 @@ def generate_launch_description():
     # 4. The Brain (FSM)
     fsm_node = Node(
         package=pkg_name,
-        executable='mission_state_machine',
-        name='mission_state_machine',
+        executable='mission_state_machine_single_tree',
+        name='mission_state_machine_single_tree',
         output='screen'
     )
 
