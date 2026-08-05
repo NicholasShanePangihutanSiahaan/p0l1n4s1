@@ -60,6 +60,8 @@ class DynamicOrbitController(Node):
         self.last_angle: Optional[float] = None
         self.accumulated_angle = 0.0
         self.last_status = ""
+        self.autonomy_enabled = False
+        self.pilot_override = False
 
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -71,6 +73,12 @@ class DynamicOrbitController(Node):
         )
         self.create_subscription(Point, "/control/orbit_target", self.target_callback, 10)
         self.create_subscription(Bool, "/control/orbit_start", self.start_callback, 10)
+        self.create_subscription(
+            Bool, "/mission/autonomy_enabled", self.autonomy_callback, 10
+        )
+        self.create_subscription(
+            Bool, "/mission/pilot_override", self.pilot_override_callback, 10
+        )
 
         self.setpoint_pub = self.create_publisher(
             PoseStamped, "/control/dynamic_target", 10
@@ -90,7 +98,38 @@ class DynamicOrbitController(Node):
     def pose_callback(self, msg: PoseStamped) -> None:
         self.current_pose = msg
 
+    def pilot_override_callback(self, msg: Bool) -> None:
+        self.pilot_override = bool(msg.data)
+        if self.pilot_override:
+            self.phase = "IDLE"
+            self.radius_stable_since = None
+            self.last_angle = None
+            self.accumulated_angle = 0.0
+            self.publish_status(
+                "PILOT_OVERRIDE" if self.pilot_override else "IDLE", force=True
+            )
+            self.publish_progress(0.0)
+
+    def autonomy_callback(self, msg: Bool) -> None:
+        enabled = bool(msg.data)
+        if self.autonomy_enabled and not enabled:
+            self.phase = "IDLE"
+            self.radius_stable_since = None
+            self.last_angle = None
+            self.accumulated_angle = 0.0
+            self.publish_status(
+                "PILOT_OVERRIDE" if self.pilot_override else "IDLE", force=True
+            )
+            self.publish_progress(0.0)
+            reason = "pilot takeover" if self.pilot_override else "mission control gate"
+            self.get_logger().warning(
+                f"Autonomy disabled ({reason}): orbit target publication stopped."
+            )
+        self.autonomy_enabled = enabled
+
     def target_callback(self, msg: Point) -> None:
+        if not self.autonomy_enabled:
+            return
         if not all(math.isfinite(float(v)) for v in (msg.x, msg.y, msg.z)):
             self.get_logger().warning("Target orbit invalid diabaikan.")
             return
@@ -98,6 +137,9 @@ class DynamicOrbitController(Node):
         self.target_received_time = self.now_sec()
 
     def start_callback(self, msg: Bool) -> None:
+        if msg.data and not self.autonomy_enabled:
+            self.get_logger().warning("Perintah orbit diabaikan: autonomy disabled.")
+            return
         if not msg.data:
             if self.phase != "IDLE":
                 self.get_logger().info("Orbit dihentikan oleh mission state machine.")
@@ -160,6 +202,8 @@ class DynamicOrbitController(Node):
         self.setpoint_pub.publish(setpoint)
 
     def control_loop(self) -> None:
+        if not self.autonomy_enabled:
+            return
         if self.phase == "IDLE" or self.current_pose is None:
             return
 

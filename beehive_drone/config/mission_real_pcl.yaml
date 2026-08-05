@@ -44,6 +44,11 @@ mission_state_machine:
     hold_after_takeoff: true
     disconnect_grace_sec: 8.0
 
+    # Any RC flight-mode change away from GUIDED permanently hands control
+    # to the pilot for the current mission process.
+    enable_rc_takeover: true
+    rc_takeover_confirm_sec: 0.30
+
     require_tree_map: true
     map_timeout_sec: 6.0
     map_startup_timeout_sec: 35.0

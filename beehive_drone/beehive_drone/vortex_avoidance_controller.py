@@ -67,6 +67,8 @@ class VortexAvoidanceController(Node):
         self.map_ready = False
         self.last_warning_time = -1e9
         self.last_frame_warning = -1e9
+        self.autonomy_enabled = False
+        self.pilot_override = False
 
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -94,6 +96,12 @@ class VortexAvoidanceController(Node):
         self.create_subscription(
             Int32, "/control/active_tree_id", self.active_tree_callback, 10
         )
+        self.create_subscription(
+            Bool, "/mission/autonomy_enabled", self.autonomy_callback, 10
+        )
+        self.create_subscription(
+            Bool, "/mission/pilot_override", self.pilot_override_callback, 10
+        )
 
         self.safe_target_pub = self.create_publisher(
             PoseStamped, "/control/safe_target_pose", 10
@@ -118,11 +126,32 @@ class VortexAvoidanceController(Node):
     def map_ready_callback(self, msg: Bool) -> None:
         self.map_ready = bool(msg.data)
 
+    def pilot_override_callback(self, msg: Bool) -> None:
+        self.pilot_override = bool(msg.data)
+
+    def autonomy_callback(self, msg: Bool) -> None:
+        enabled = bool(msg.data)
+        if self.autonomy_enabled and not enabled:
+            self.fsm_goal = None
+            self.orbit_goal = None
+            self.fsm_goal_time = None
+            self.orbit_goal_time = None
+            self.active_tree_id = -1
+            reason = "pilot takeover" if self.pilot_override else "mission control gate"
+            self.get_logger().warning(
+                f"Autonomy disabled ({reason}): avoidance target publication stopped."
+            )
+        self.autonomy_enabled = enabled
+
     def fsm_goal_callback(self, msg: PoseStamped) -> None:
+        if not self.autonomy_enabled:
+            return
         self.fsm_goal = msg
         self.fsm_goal_time = self.now_sec()
 
     def orbit_goal_callback(self, msg: PoseStamped) -> None:
+        if not self.autonomy_enabled:
+            return
         self.orbit_goal = msg
         self.orbit_goal_time = self.now_sec()
 
@@ -157,6 +186,8 @@ class VortexAvoidanceController(Node):
         self.safe_target_pub.publish(safe)
 
     def control_loop(self) -> None:
+        if not self.autonomy_enabled:
+            return
         if self.current_pose is None:
             return
         goal = self.active_goal()

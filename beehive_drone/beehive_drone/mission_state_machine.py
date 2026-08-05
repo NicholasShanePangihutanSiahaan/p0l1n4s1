@@ -50,6 +50,8 @@ class MissionStateMachine(Node):
             "disconnect_grace_sec": MissionConfig.DISCONNECT_GRACE_SEC,
             "land_complete_altitude": MissionConfig.LAND_COMPLETE_ALTITUDE,
             "home_reached_tolerance": MissionConfig.HOME_REACHED_TOLERANCE,
+            "enable_rc_takeover": MissionConfig.ENABLE_RC_TAKEOVER,
+            "rc_takeover_confirm_sec": MissionConfig.RC_TAKEOVER_CONFIRM_SEC,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -101,6 +103,12 @@ class MissionStateMachine(Node):
         self.home_reached_tolerance = float(
             self.get_parameter("home_reached_tolerance").value
         )
+        self.enable_rc_takeover = bool(
+            self.get_parameter("enable_rc_takeover").value
+        )
+        self.rc_takeover_confirm_sec = max(
+            0.0, float(self.get_parameter("rc_takeover_confirm_sec").value)
+        )
 
         if self.approach_distance <= 0.0:
             raise ValueError("approach_distance harus lebih besar dari 0")
@@ -138,6 +146,8 @@ class MissionStateMachine(Node):
         self.takeoff_command_sent = False
         self.unexpected_disarm_since: Optional[float] = None
         self.last_link_warning_time = -1e9
+        self.mode_mismatch_since: Optional[float] = None
+        self.pilot_override_latched = False
 
         self.target_tree: Optional[Tree] = None
         self.pre_orbit_point: Optional[Tuple[float, float, float]] = None
@@ -182,6 +192,12 @@ class MissionStateMachine(Node):
         self.tree_update_pub = self.create_publisher(Tree, "/map/tree_update", 10)
         self.fsm_state_pub = self.create_publisher(String, "/mission/fsm_state", 10)
         self.mission_status_pub = self.create_publisher(String, "/mission/status", 10)
+        self.autonomy_enabled_pub = self.create_publisher(
+            Bool, "/mission/autonomy_enabled", 10
+        )
+        self.pilot_override_pub = self.create_publisher(
+            Bool, "/mission/pilot_override", 10
+        )
 
         self.create_timer(0.1, self.loop)
         self.get_logger().info(
@@ -268,6 +284,106 @@ class MissionStateMachine(Node):
         target = Float32()
         target.data = float(self.takeoff_target_z)
         self.target_altitude_pub.publish(target)
+
+    @staticmethod
+    def autonomous_states() -> set[str]:
+        """States in which companion-computer flight targets are allowed."""
+        return {
+            "TAKEOFF",
+            "HOLD",
+            "SEARCH_TREE",
+            "APPROACH_TREE",
+            "HOVER_BEFORE_ORBIT",
+            "PREPARE_ORBIT",
+            "WAIT_ORBIT",
+            "POST_ORBIT_HOVER",
+            "RETURN_PRE_ORBIT",
+            "HOVER_AT_PRE_ORBIT",
+            "RETURN_HOME",
+            "HOME_HOVER",
+        }
+
+    @classmethod
+    def takeover_monitor_states(cls) -> set[str]:
+        """Armed states where an RC mode change must cancel automation."""
+        return cls.autonomous_states() | {"ARM", "LAND", "WAIT_LANDED", "ABORTED"}
+
+    def publish_control_authority(self, autonomy_enabled: bool) -> None:
+        # Publish the takeover latch first so downstream controllers can label
+        # and process the following authority drop correctly.
+        override = Bool()
+        override.data = bool(self.pilot_override_latched)
+        self.pilot_override_pub.publish(override)
+
+        autonomy = Bool()
+        autonomy.data = bool(autonomy_enabled and not self.pilot_override_latched)
+        self.autonomy_enabled_pub.publish(autonomy)
+
+    def enter_pilot_override(self, observed_mode: str) -> None:
+        if self.pilot_override_latched:
+            return
+        self.pilot_override_latched = True
+        self.mode_mismatch_since = None
+        self.stop_orbit(clear_active_tree=True)
+        self.target_tree = None
+        self.post_orbit_hold_point = None
+        self.publish_control_authority(False)
+        self.transition(
+            "PILOT_OVERRIDE",
+            f"Pilot takeover: mode {self.flight_mode} -> {observed_mode}; "
+            "kontrol otomatis dinonaktifkan sampai node direstart",
+        )
+
+    def update_control_authority(self, now: float) -> bool:
+        """Return True after a pilot takeover has been latched."""
+        current_mode = self.current_mode.strip().upper()
+        expected_mode = self.flight_mode.strip().upper()
+
+        if self.pilot_override_latched or self.state == "PILOT_OVERRIDE":
+            self.pilot_override_latched = True
+            self.publish_control_authority(False)
+            return True
+
+        allowed_modes = {expected_mode}
+        # A LAND mode entered after our own landing command is not a takeover.
+        # Any other RC-selected mode still hands authority to the pilot and
+        # prevents further automatic landing retries.
+        if self.state in {"LAND", "WAIT_LANDED", "ABORTED"}:
+            allowed_modes.add("LAND")
+
+        autonomous = (
+            self.armed
+            and self.state in self.autonomous_states()
+            and bool(current_mode)
+            and current_mode == expected_mode
+        )
+
+        mismatch = (
+            self.enable_rc_takeover
+            and self.armed
+            and self.state in self.takeover_monitor_states()
+            and bool(current_mode)
+            and current_mode not in allowed_modes
+        )
+        if mismatch:
+            if self.mode_mismatch_since is None:
+                self.mode_mismatch_since = now
+                self.get_logger().warning(
+                    f"Mode berubah dari {expected_mode} ke {current_mode}; "
+                    "kontrol otomatis dihentikan sambil mengonfirmasi pilot takeover."
+                )
+            elif now - self.mode_mismatch_since >= self.rc_takeover_confirm_sec:
+                self.enter_pilot_override(current_mode)
+                return True
+
+            # Stop FSM commands immediately on the first mismatched mode sample.
+            # The debounce only decides whether the takeover becomes permanent.
+            self.publish_control_authority(False)
+            return True
+
+        self.mode_mismatch_since = None
+        self.publish_control_authority(autonomous)
+        return False
 
     def publish_goal(self, x: float, y: float, yaw: float, z: Optional[float] = None) -> None:
         goal = PoseStamped()
@@ -397,11 +513,18 @@ class MissionStateMachine(Node):
 
     def loop(self) -> None:
         self.publish_state()
+        now = self.now_sec()
+
+        # Remote takeover is checked before pose/map gates. Therefore the pilot
+        # can take control even when VSLAM/PCL is stale or unavailable.
+        if self.update_control_authority(now):
+            if self.state == "PILOT_OVERRIDE" and not self.armed:
+                self.transition("DONE", "Drone disarm setelah pilot takeover")
+            return
 
         if self.current_pose is None:
             return
 
-        now = self.now_sec()
         if self.armed and not self.connected and self.state not in {
             "LAND",
             "WAIT_LANDED",
@@ -665,6 +788,15 @@ class MissionStateMachine(Node):
             elif now - self.last_land_command_time >= self.land_retry_sec:
                 self.last_land_command_time = now
                 self.send_bool(self.land_pub, True)
+
+        elif self.state == "PILOT_OVERRIDE":
+            # No flight commands, goals, mode changes, landing commands, or
+            # zero-velocity setpoints are sent in this state. Pixhawk and RC
+            # have full authority. Returning the switch to GUIDED does not
+            # resume the old mission; restart the node from the ground.
+            self.publish_control_authority(False)
+            if not self.armed:
+                self.transition("DONE", "Drone disarm setelah pilot takeover")
 
         elif self.state == "ABORTED":
             self.stop_orbit()

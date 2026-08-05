@@ -27,6 +27,11 @@ class MissionConfig:
     STATE_TIMEOUT_SEC = 90.0
     DISCONNECT_GRACE_SEC = 8.0
 
+    # RC/pilot takeover. Any confirmed flight-mode change away from the
+    # autonomous mode permanently disables autonomy for the current process.
+    ENABLE_RC_TAKEOVER = True
+    RC_TAKEOVER_CONFIRM_SEC = 0.30
+
     # Map safety gate
     REQUIRE_TREE_MAP = True
     MAP_STARTUP_TIMEOUT_SEC = 35.0

@@ -64,6 +64,8 @@ class VelocityController(Node):
         self.fsm_state = "INIT"
         self.map_ready = False
         self.last_warning_time = -1e9
+        self.autonomy_enabled = False
+        self.pilot_override = False
 
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -83,6 +85,12 @@ class VelocityController(Node):
         )
         self.create_subscription(String, "/mission/fsm_state", self.state_callback, 10)
         self.create_subscription(Bool, "/map/trees_ready", self.map_ready_callback, qos_map)
+        self.create_subscription(
+            Bool, "/mission/autonomy_enabled", self.autonomy_callback, 10
+        )
+        self.create_subscription(
+            Bool, "/mission/pilot_override", self.pilot_override_callback, 10
+        )
         self.velocity_pub = self.create_publisher(
             TwistStamped, "/mavros/setpoint_velocity/cmd_vel", 10
         )
@@ -99,6 +107,8 @@ class VelocityController(Node):
         self.last_pose_time = self.now_sec()
 
     def target_callback(self, msg: PoseStamped) -> None:
+        if not self.autonomy_enabled:
+            return
         self.target_pose = msg
         self.last_target_time = self.now_sec()
 
@@ -107,6 +117,23 @@ class VelocityController(Node):
 
     def map_ready_callback(self, msg: Bool) -> None:
         self.map_ready = bool(msg.data)
+
+    def pilot_override_callback(self, msg: Bool) -> None:
+        self.pilot_override = bool(msg.data)
+
+    def autonomy_callback(self, msg: Bool) -> None:
+        enabled = bool(msg.data)
+        if self.autonomy_enabled and not enabled:
+            # Drop every stored target. Do not publish zero velocity here: once
+            # the pilot changes mode, this node must become completely silent.
+            self.target_pose = None
+            self.last_target_time = None
+            self.last_vx = self.last_vy = self.last_vz = 0.0
+            reason = "pilot takeover" if self.pilot_override else "mission control gate"
+            self.get_logger().warning(
+                f"Autonomy disabled ({reason}): velocity setpoint publication stopped."
+            )
+        self.autonomy_enabled = enabled
 
     @staticmethod
     def rate_limit(target: float, previous: float, max_delta: float) -> float:
@@ -120,6 +147,9 @@ class VelocityController(Node):
         self.last_vx = self.last_vy = self.last_vz = 0.0
 
     def control_loop(self) -> None:
+        if not self.autonomy_enabled:
+            return
+
         now = self.now_sec()
         dt = max(0.01, min(0.2, now - self.last_loop_time))
         self.last_loop_time = now
@@ -135,6 +165,7 @@ class VelocityController(Node):
             "WAIT_LANDED",
             "ABORTED",
             "DONE",
+            "PILOT_OVERRIDE",
         }
         if self.fsm_state in no_velocity_states:
             return
@@ -243,7 +274,7 @@ def main(args=None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        if rclpy.ok():
+        if rclpy.ok() and node.autonomy_enabled:
             node.publish_zero()
         node.destroy_node()
         if rclpy.ok():
