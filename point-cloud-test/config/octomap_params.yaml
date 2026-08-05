@@ -1,0 +1,22 @@
+octomap_server:
+  ros__parameters:
+    resolution: 0.1
+    frame_id: "plantation"
+    base_frame_id: "plantation"
+
+    sensor_model:
+      max_range: 10.0
+      hit: 0.7
+      miss: 0.4
+      min: 0.12
+      max: 0.97
+
+    latch: true
+    publish_free_space: false
+
+    pointcloud_min_z: -0.5
+    pointcloud_max_z: 30.0
+    occupancy_min_z: 0.0
+    occupancy_max_z: 10.0
+
+    filter_speckles: false

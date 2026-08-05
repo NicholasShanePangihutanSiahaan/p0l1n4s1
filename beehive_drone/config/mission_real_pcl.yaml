@@ -1,0 +1,134 @@
+/**:
+  ros__parameters:
+    use_sim_time: false
+    world_frame: odom
+
+vision_to_mavros:
+  ros__parameters:
+    input_pose_topic: /zed/zed_node/pose
+    output_pose_topic: /mavros/vision_pose/pose
+    replace_timestamp: false
+
+pcl_proc_node:
+  ros__parameters:
+    output_frame: odom
+    process_period_ms: 500
+    max_buffered_pairs: 2
+    voxel_leaf_size: 0.20
+    max_merged_points: 600000
+    sor_mean_k: 30
+    sor_stddev: 1.0
+    camera_mount_x: 0.0
+    camera_mount_y: 0.0
+    camera_mount_z: 0.0
+    camera_mount_roll: 0.0
+    camera_mount_pitch: 0.0
+    camera_mount_yaw: 0.0
+
+flight_manager:
+  ros__parameters:
+    hover_alt_tolerance: 0.25
+    hover_speed_tolerance: 0.20
+    hover_stable_sec: 1.5
+    pose_timeout_sec: 1.5
+
+mission_state_machine:
+  ros__parameters:
+    flight_mode: GUIDED
+    flight_altitude: 3.0
+    command_retry_sec: 2.5
+    land_retry_sec: 5.0
+    takeoff_timeout_sec: 45.0
+    takeoff_progress_check_sec: 20.0
+    min_takeoff_progress: 0.20
+    hold_after_takeoff: true
+    disconnect_grace_sec: 8.0
+
+    require_tree_map: true
+    map_timeout_sec: 6.0
+    map_startup_timeout_sec: 35.0
+    map_loss_grace_sec: 3.0
+
+    tree_search_radius: 18.0
+    tree_min_confidence: 0.35
+    approach_distance: 3.0
+    approach_tolerance: 0.25
+    orbit_radius: 3.0
+    orbit_start_tolerance: 0.45
+    orbit_timeout_sec: 120.0
+    pre_orbit_hover_sec: 3.0
+    post_orbit_hover_sec: 3.0
+    return_hover_sec: 2.0
+    home_hover_sec: 3.0
+    hover_wait_timeout_sec: 30.0
+
+pcl_tree_mapper:
+  ros__parameters:
+    pcl_source_frame: odom
+    pcl_topic: /perception/pcl/tracked_cylinders
+    min_seen_count: 3
+    max_missed_count: 20
+    min_confidence: 0.30
+    min_radius: 0.08
+    max_radius: 1.20
+    min_height: 0.8
+    max_height: 20.0
+    tree_stale_sec: 60.0
+    pcl_stream_timeout_sec: 6.0
+    min_ready_trees: 1
+    enable_fallback_points: false
+    allow_identity_frame_relabel: false
+
+dynamic_orbit_controller:
+  ros__parameters:
+    orbit_radius: 3.0
+    orbit_altitude: 3.0
+    orbit_velocity: 0.30
+    orbit_direction: 1.0
+    lookahead_distance: 0.35
+    radius_tolerance: 0.30
+    completion_margin: 0.0
+    orbit_timeout_sec: 120.0
+    yaw_offset: 0.0
+
+vortex_avoidance_controller:
+  ros__parameters:
+    influence_radius: 4.5
+    hard_radius: 2.2
+    active_tree_keepout_radius: 2.2
+    emergency_stop_radius: 1.8
+    repulsive_gain: 2.5
+    vortex_gain: 0.8
+    attraction_gain: 0.6
+    max_target_shift: 0.6
+    goal_timeout_sec: 1.0
+    require_map_ready: true
+
+velocity_controller:
+  ros__parameters:
+    kp_xy: 0.45
+    kp_z: 0.80
+    kp_yaw: 1.0
+    max_velocity_xy: 0.30
+    max_velocity_z: 0.50
+    max_velocity_yaw: 0.40
+    max_acceleration_xy: 0.20
+    max_acceleration_z: 0.40
+    goal_threshold_xy: 0.15
+    goal_threshold_z: 0.10
+    target_timeout_sec: 1.0
+    pose_timeout_sec: 1.5
+    require_map_ready: true
+
+mission_analyzer:
+  ros__parameters:
+    output_dir: /home/shane/beehive_mission_results
+    sample_period_sec: 0.2
+    summary_period_sec: 5.0
+    autosave_period_sec: 10.0
+    enable_live_plot: false
+    save_2d_png: true
+    save_3d_png: true
+    save_png_during_mission: true
+    plot_dpi: 180
+    max_plot_samples: 20000

@@ -1,183 +1,335 @@
 #!/usr/bin/env python3
 
 import math
+from typing import Optional
+
 import rclpy
+from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
-from beehive_drone.mission_params import MissionConfig
-from geometry_msgs.msg import PoseStamped, Point
-from std_msgs.msg import String
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool, Int32, String
 from uav_interfaces.msg import TreeArray
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+
+from beehive_drone.mission_params import MissionConfig
+
 
 class VortexAvoidanceController(Node):
-    def __init__(self):
+    """Shapes mission targets while enforcing a keep-out radius around trunks."""
+
+    def __init__(self) -> None:
         super().__init__("vortex_avoidance_controller")
+
+        defaults = {
+            "world_frame": MissionConfig.WORLD_FRAME,
+            "influence_radius": MissionConfig.OBSTACLE_INFLUENCE_RADIUS,
+            "hard_radius": MissionConfig.OBSTACLE_HARD_RADIUS,
+            "active_tree_keepout_radius": MissionConfig.ACTIVE_TARGET_KEEP_OUT_RADIUS,
+            "emergency_stop_radius": MissionConfig.EMERGENCY_STOP_RADIUS,
+            "repulsive_gain": MissionConfig.REPULSIVE_GAIN,
+            "vortex_gain": MissionConfig.VORTEX_GAIN,
+            "attraction_gain": MissionConfig.ATTRACTION_GAIN,
+            "max_target_shift": MissionConfig.MAX_TARGET_SHIFT,
+            "goal_timeout_sec": MissionConfig.TARGET_TIMEOUT_SEC,
+            "require_map_ready": MissionConfig.REQUIRE_TREE_MAP,
+        }
+        for name, value in defaults.items():
+            self.declare_parameter(name, value)
+
+        self.world_frame = str(self.get_parameter("world_frame").value)
+        self.influence_radius = float(self.get_parameter("influence_radius").value)
+        self.hard_radius = float(self.get_parameter("hard_radius").value)
+        self.active_tree_keepout_radius = float(
+            self.get_parameter("active_tree_keepout_radius").value
+        )
+        self.emergency_stop_radius = float(
+            self.get_parameter("emergency_stop_radius").value
+        )
+        self.repulsive_gain = float(self.get_parameter("repulsive_gain").value)
+        self.vortex_gain = float(self.get_parameter("vortex_gain").value)
+        self.attraction_gain = float(self.get_parameter("attraction_gain").value)
+        self.max_target_shift = float(self.get_parameter("max_target_shift").value)
+        self.goal_timeout_sec = float(self.get_parameter("goal_timeout_sec").value)
+        self.require_map_ready = bool(self.get_parameter("require_map_ready").value)
+
+        if self.influence_radius <= max(
+            self.hard_radius, self.active_tree_keepout_radius
+        ):
+            raise ValueError("influence_radius harus lebih besar dari seluruh keep-out radius")
+
+        self.current_pose: Optional[PoseStamped] = None
+        self.fsm_goal: Optional[PoseStamped] = None
+        self.orbit_goal: Optional[PoseStamped] = None
+        self.fsm_goal_time: Optional[float] = None
+        self.orbit_goal_time: Optional[float] = None
+        self.fsm_state = "INIT"
+        self.active_tree_id = -1
+        self.trees = []
+        self.map_ready = False
+        self.last_warning_time = -1e9
+        self.last_frame_warning = -1e9
 
         qos_sensor = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10
+            depth=10,
         )
         qos_map = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=1,
         )
 
-        # ==========================================
-        # Parameter Medan Pusaran (Vortex & Potential Field)
-        # ==========================================
-        self.safety_radius = MissionConfig.SAFETY_RADIUS       # Batas aman drone bereaksi (meter)
-        self.repulsive_gain = MissionConfig.REPULSIVE_GAIN      # Kekuatan gaya tolak menjauhi halangan
-        self.vortex_gain = MissionConfig.VORTEX_GAIN         # Kekuatan gaya geser/meliuk (tangensial)
-        self.attraction_gain = MissionConfig.ATTRACTION_GAIN     # Tarikan ke tujuan asli
-        
-        self.max_shift = MissionConfig.MAX_SHIFT           # Batas maksimal pergeseran vektor (m)
+        self.create_subscription(
+            PoseStamped, "/mavros/local_position/pose", self.pose_callback, qos_sensor
+        )
+        self.create_subscription(String, "/mission/fsm_state", self.state_callback, 10)
+        self.create_subscription(TreeArray, "/map/trees", self.tree_callback, qos_map)
+        self.create_subscription(Bool, "/map/trees_ready", self.map_ready_callback, qos_map)
+        self.create_subscription(
+            PoseStamped, "/navigation/local_goal", self.fsm_goal_callback, 10
+        )
+        self.create_subscription(
+            PoseStamped, "/control/dynamic_target", self.orbit_goal_callback, 10
+        )
+        self.create_subscription(
+            Int32, "/control/active_tree_id", self.active_tree_callback, 10
+        )
 
-        # ==========================================
-        # Variabel State
-        # ==========================================
-        self.current_pose = None
-        self.fsm_state = "INIT"
-        self.trees = []                # Database obstacle statis
-        self.branches = []             # (Opsional) Ranting dinamis dari deteksi depth
-        
-        self.fsm_goal = None
-        self.orbit_goal = None
+        self.safe_target_pub = self.create_publisher(
+            PoseStamped, "/control/safe_target_pose", 10
+        )
+        self.create_timer(0.05, self.control_loop)
+        self.get_logger().info(
+            "Vortex safety aktif; pohon target bebas diorbit di luar keep-out radius."
+        )
 
-        # ==========================================
-        # Subscriber
-        # ==========================================
-        self.pose_sub = self.create_subscription(PoseStamped, "/mavros/local_position/pose", self.pose_cb, qos_sensor)
-        self.fsm_state_sub = self.create_subscription(String, "/mission/fsm_state", self.fsm_state_cb, 10)
-        self.tree_sub = self.create_subscription(TreeArray, "/map/trees", self.tree_cb, qos_map)
-        
-        # Menerima "niat/target" dari FSM atau Orbit
-        self.fsm_goal_sub = self.create_subscription(PoseStamped, "/navigation/local_goal", self.fsm_goal_cb, 10)
-        self.orbit_goal_sub = self.create_subscription(PoseStamped, "/control/dynamic_target", self.orbit_goal_cb, 10)
-        
-        # (Opsional) Subscriber untuk deteksi ranting melintang dari kamera ZED 2i
-        # self.branch_sub = self.create_subscription(Point, "/perception/obstacle_point", self.branch_cb, 10)
+    def now_sec(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
 
-        # ==========================================
-        # Publisher
-        # ==========================================
-        # Mengirim Point target yang SUDAH AMAN ke velocity_controller.py
-        self.safe_target_pub = self.create_publisher(PoseStamped, "/control/safe_target_pose", 10)
+    def pose_callback(self, msg: PoseStamped) -> None:
+        self.current_pose = msg
 
-        # Timer berjalan pada 20 Hz (sinkron dengan kontroler gerak)
-        self.timer = self.create_timer(0.05, self.vortex_control_loop)
+    def state_callback(self, msg: String) -> None:
+        self.fsm_state = msg.data
 
-        self.get_logger().info("Vortex Avoidance (Potential Field) Controller Siap!")
+    def tree_callback(self, msg: TreeArray) -> None:
+        self.trees = list(msg.trees)
 
-    # --- Callbacks ---
-    def pose_cb(self, msg): self.current_pose = msg
-    def fsm_state_cb(self, msg): self.fsm_state = msg.data
-    def tree_cb(self, msg): self.trees = msg.trees
-    def fsm_goal_cb(self, msg): self.fsm_goal = msg
-    def orbit_goal_cb(self, msg): self.orbit_goal = msg
+    def map_ready_callback(self, msg: Bool) -> None:
+        self.map_ready = bool(msg.data)
 
-    # --- Logika Matematika Vortex ---
-    def vortex_control_loop(self):
+    def fsm_goal_callback(self, msg: PoseStamped) -> None:
+        self.fsm_goal = msg
+        self.fsm_goal_time = self.now_sec()
+
+    def orbit_goal_callback(self, msg: PoseStamped) -> None:
+        self.orbit_goal = msg
+        self.orbit_goal_time = self.now_sec()
+
+    def active_tree_callback(self, msg: Int32) -> None:
+        self.active_tree_id = int(msg.data)
+
+    def active_goal(self) -> Optional[PoseStamped]:
+        now = self.now_sec()
+        if self.fsm_state in {"PREPARE_ORBIT", "WAIT_ORBIT"}:
+            if (
+                self.orbit_goal is not None
+                and self.orbit_goal_time is not None
+                and now - self.orbit_goal_time <= self.goal_timeout_sec
+            ):
+                return self.orbit_goal
+            return None
+        if (
+            self.fsm_goal is not None
+            and self.fsm_goal_time is not None
+            and now - self.fsm_goal_time <= self.goal_timeout_sec
+        ):
+            return self.fsm_goal
+        return None
+
+    def publish_hold(self) -> None:
         if self.current_pose is None:
             return
+        safe = PoseStamped()
+        safe.header.frame_id = self.world_frame
+        safe.header.stamp = self.get_clock().now().to_msg()
+        safe.pose = self.current_pose.pose
+        self.safe_target_pub.publish(safe)
 
-        cx = self.current_pose.pose.position.x
-        cy = self.current_pose.pose.position.y
-        cz = self.current_pose.pose.position.z
-
-        # 1. Tentukan Goal Mana yang Sedang Aktif
-        active_goal = None
-        if self.fsm_state in ["START_ORBIT", "WAIT_ORBIT"]:
-            active_goal = self.orbit_goal
-        else:
-            active_goal = self.fsm_goal
-
-        if active_goal is None:
+    def control_loop(self) -> None:
+        if self.current_pose is None:
+            return
+        goal = self.active_goal()
+        if goal is None:
             return
 
-        target_x = active_goal.pose.position.x
-        target_y = active_goal.pose.position.y
-        target_z = active_goal.pose.position.z
+        if goal.header.frame_id and goal.header.frame_id != self.world_frame:
+            now = self.now_sec()
+            if now - self.last_frame_warning > 2.0:
+                self.last_frame_warning = now
+                self.get_logger().error(
+                    f"Goal frame={goal.header.frame_id}, expected={self.world_frame}; HOLD."
+                )
+            self.publish_hold()
+            return
 
-        # 2. Vektor Tarikan (Attractive Vector) ke Tujuan Asli
-        # Dihitung relatif terhadap posisi drone saat ini
-        dist_to_goal = math.sqrt((target_x - cx)**2 + (target_y - cy)**2)
-        if dist_to_goal > 0.1:
-            # NORMALISASI VEKTOR: Tarikan selalu konstan (kekuatannya = attraction_gain)
-            # Tidak peduli sejauh apa pun targetnya, tarikan tidak akan pernah membesar.
-            att_dx = ((target_x - cx) / dist_to_goal) * self.attraction_gain
-            att_dy = ((target_y - cy) / dist_to_goal) * self.attraction_gain
+        pass_through_states = {
+            "SET_MODE",
+            "ARM",
+            "TAKEOFF",
+            "HOLD",
+            "SEARCH_TREE",
+            "POST_ORBIT_HOVER",
+            "HOVER_AT_PRE_ORBIT",
+            "HOME_HOVER",
+            "LAND",
+            "WAIT_LANDED",
+            "ABORTED",
+            "DONE",
+        }
+        if self.fsm_state in pass_through_states:
+            safe = PoseStamped()
+            safe.header.frame_id = self.world_frame
+            safe.header.stamp = self.get_clock().now().to_msg()
+            safe.pose = goal.pose
+            self.safe_target_pub.publish(safe)
+            return
+
+        map_required_states = {
+            "APPROACH_TREE",
+            "HOVER_BEFORE_ORBIT",
+            "PREPARE_ORBIT",
+            "WAIT_ORBIT",
+        }
+        if (
+            self.require_map_ready
+            and self.fsm_state in map_required_states
+            and (not self.map_ready or not self.trees)
+        ):
+            self.publish_hold()
+            return
+
+        cx = float(self.current_pose.pose.position.x)
+        cy = float(self.current_pose.pose.position.y)
+        gx = float(goal.pose.position.x)
+        gy = float(goal.pose.position.y)
+
+        goal_dx = gx - cx
+        goal_dy = gy - cy
+        goal_distance = math.hypot(goal_dx, goal_dy)
+        if goal_distance > 1e-6:
+            goal_ux = goal_dx / goal_distance
+            goal_uy = goal_dy / goal_distance
         else:
-            att_dx = 0.0
-            att_dy = 0.0
-        # 3. Kalkulasi Vektor Penolakan (Repulsive) & Pusaran (Vortex)
-        rep_dx = 0.0
-        rep_dy = 0.0
-        vort_dx = 0.0
-        vort_dy = 0.0
+            goal_ux = goal_uy = 0.0
+
+        field_x = self.attraction_gain * goal_ux
+        field_y = self.attraction_gain * goal_uy
+        closest_obstacle = float("inf")
 
         for tree in self.trees:
-            dx_obs = cx - tree.x  # Arah dari rintangan KE drone
-            dy_obs = cy - tree.y
-            
-            dist_to_obs = math.sqrt(dx_obs**2 + dy_obs**2)
+            is_active = int(tree.id) == self.active_tree_id
+            dx = cx - float(tree.x)
+            dy = cy - float(tree.y)
+            distance = math.hypot(dx, dy)
+            if distance <= 1e-4:
+                continue
 
-            if dist_to_obs < self.safety_radius and dist_to_obs > 0:
-                self.get_logger().warn(f"SAFETY TRIGGERED! Menghindari objek pada jarak {dist_to_obs:.2f}m")
-                
-                # Jarak penetrasi ke dalam zona bahaya
-                penetration = self.safety_radius - dist_to_obs
-                
-                # Sudut tolakan
-                push_angle = math.atan2(dy_obs, dx_obs)
+            # Pohon target boleh diorbit pada radius misi. Target aktif hanya
+            # menghasilkan tolakan bila drone masuk ke keep-out radius; pohon
+            # lain tetap menggunakan influence radius penuh.
+            if is_active:
+                closest_obstacle = min(closest_obstacle, distance)
+                if distance >= self.active_tree_keepout_radius:
+                    continue
+                local_hard_radius = self.active_tree_keepout_radius
+                local_influence_radius = self.active_tree_keepout_radius + 0.8
+            else:
+                local_hard_radius = self.hard_radius
+                local_influence_radius = max(
+                    self.influence_radius, local_hard_radius + 0.8
+                )
+                if distance >= local_influence_radius:
+                    continue
+                closest_obstacle = min(closest_obstacle, distance)
 
-                # A. Gaya Tolak Normal (Repulsive Force) - Mencegah tabrakan frontal
-                force = penetration * self.repulsive_gain
-                rep_dx += math.cos(push_angle) * force
-                rep_dy += math.sin(push_angle) * force
+            ux = dx / distance
+            uy = dy / distance
+            effective_distance = max(distance, local_hard_radius * 0.35)
+            repulsive = self.repulsive_gain * (
+                (1.0 / effective_distance) - (1.0 / local_influence_radius)
+            ) / (effective_distance * effective_distance)
+            if distance < local_hard_radius:
+                repulsive += 2.0 * self.repulsive_gain * (
+                    local_hard_radius - distance
+                ) / local_hard_radius
 
-                # B. Gaya Tangensial (Vortex Force) - Membanting kemudi menyamping
-                # Pusaran sudut: -90 derajat (Clockwise) agar mengalir di sekitar objek
-                vortex_angle = push_angle - (math.pi / 2.0)
-                v_force = penetration * self.vortex_gain
-                
-                vort_dx += math.cos(vortex_angle) * v_force
-                vort_dy += math.sin(vortex_angle) * v_force
+            field_x += repulsive * ux
+            field_y += repulsive * uy
 
-        # 4. Resultan Vektor Akhir
-        final_dx = att_dx + rep_dx + vort_dx
-        final_dy = att_dy + rep_dy + vort_dy
+            if not is_active:
+                tangent_a = (-uy, ux)
+                tangent_b = (uy, -ux)
+                dot_a = tangent_a[0] * goal_ux + tangent_a[1] * goal_uy
+                dot_b = tangent_b[0] * goal_ux + tangent_b[1] * goal_uy
+                tangent = tangent_a if dot_a >= dot_b else tangent_b
+                vortex_weight = self.vortex_gain * (
+                    local_influence_radius - distance
+                ) / local_influence_radius
+                field_x += vortex_weight * tangent[0]
+                field_y += vortex_weight * tangent[1]
 
-        # Membatasi pergeseran target ekstrem agar drone tidak terguling
-        shift_mag = math.sqrt(final_dx**2 + final_dy**2)
-        if shift_mag > self.max_shift:
-            final_dx = (final_dx / shift_mag) * self.max_shift
-            final_dy = (final_dy / shift_mag) * self.max_shift
+        if closest_obstacle < self.emergency_stop_radius:
+            self.publish_hold()
+            now = self.now_sec()
+            if now - self.last_warning_time > 0.5:
+                self.last_warning_time = now
+                self.get_logger().error(
+                    f"EMERGENCY HOLD: obstacle {closest_obstacle:.2f} m."
+                )
+            return
 
-        safe_pose = PoseStamped()
-        safe_pose.header.frame_id = "odom"
-        safe_pose.header.stamp = self.get_clock().now().to_msg()
+        field_magnitude = math.hypot(field_x, field_y)
+        if field_magnitude > self.max_target_shift:
+            scale = self.max_target_shift / field_magnitude
+            field_x *= scale
+            field_y *= scale
 
-        # 1. Memasukkan Posisi (X,Y,Z) yang sudah aman dari gaya tolak
-        safe_pose.pose.position.x = cx + final_dx
-        safe_pose.pose.position.y = cy + final_dy
-        safe_pose.pose.position.z = float(target_z)
+        if goal_distance < 0.05 and closest_obstacle == float("inf"):
+            safe_x, safe_y = gx, gy
+        else:
+            safe_x = cx + field_x
+            safe_y = cy + field_y
 
-        # 2. Meneruskan Orientasi/Sudut Kamera ASLI dari FSM atau Orbit
-        safe_pose.pose.orientation = active_goal.pose.orientation
+        safe = PoseStamped()
+        safe.header.frame_id = self.world_frame
+        safe.header.stamp = self.get_clock().now().to_msg()
+        safe.pose.position.x = float(safe_x)
+        safe.pose.position.y = float(safe_y)
+        safe.pose.position.z = float(goal.pose.position.z)
+        safe.pose.orientation = goal.pose.orientation
+        self.safe_target_pub.publish(safe)
 
-        self.safe_target_pub.publish(safe_pose)
+        now = self.now_sec()
+        if closest_obstacle < self.hard_radius and now - self.last_warning_time > 1.0:
+            self.last_warning_time = now
+            self.get_logger().warning(
+                f"Obstacle dekat: {closest_obstacle:.2f} m; target lokal digeser."
+            )
 
-def main(args=None):
+
+def main(args=None) -> None:
     rclpy.init(args=args)
     node = VortexAvoidanceController()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    node.destroy_node()
-    rclpy.shutdown()
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
 
 if __name__ == "__main__":
     main()
