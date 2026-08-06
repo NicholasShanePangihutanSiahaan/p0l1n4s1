@@ -56,7 +56,7 @@ mission_state_machine:
 
     tree_search_radius: 18.0
     tree_min_confidence: 0.35
-    approach_distance: 3.0
+    approach_distance: 2.0
     approach_tolerance: 0.25
     orbit_radius: 2.0
     orbit_start_tolerance: 0.45
