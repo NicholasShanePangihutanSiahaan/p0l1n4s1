@@ -54,7 +54,7 @@ class MissionConfig:
     VERIFY_POSITION_TOLERANCE = 1.0
 
     # Single-tree approach/hover sequence
-    APPROACH_DISTANCE = 2.0
+    APPROACH_DISTANCE = 3.0
     APPROACH_TOLERANCE = 0.25
     PRE_ORBIT_HOVER_SEC = 3.0
     POST_ORBIT_HOVER_SEC = 2.0
