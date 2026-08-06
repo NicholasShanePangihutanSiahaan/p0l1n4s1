@@ -12,7 +12,7 @@ class MissionConfig:
 
     # Flight lifecycle
     FLIGHT_MODE = "GUIDED"
-    FLIGHT_ALTITUDE = 3.0
+    FLIGHT_ALTITUDE = 2.0
     PRESTREAM_SEC = 0.0
     COMMAND_RETRY_SEC = 2.5
     LAND_RETRY_SEC = 5.0
@@ -62,7 +62,7 @@ class MissionConfig:
     HOME_HOVER_SEC = 2.0
 
     # Orbit
-    ORBIT_RADIUS = 3.0
+    ORBIT_RADIUS = 2.0
     ORBIT_ALTITUDE = FLIGHT_ALTITUDE
     ORBIT_VELOCITY = 0.30
     ORBIT_DIRECTION = 1.0

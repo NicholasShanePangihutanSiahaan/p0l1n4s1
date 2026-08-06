@@ -35,7 +35,7 @@ flight_manager:
 mission_state_machine:
   ros__parameters:
     flight_mode: GUIDED
-    flight_altitude: 3.0
+    flight_altitude: 2.0
     command_retry_sec: 2.5
     land_retry_sec: 5.0
     takeoff_timeout_sec: 45.0
@@ -58,7 +58,7 @@ mission_state_machine:
     tree_min_confidence: 0.35
     approach_distance: 3.0
     approach_tolerance: 0.25
-    orbit_radius: 3.0
+    orbit_radius: 2.0
     orbit_start_tolerance: 0.45
     orbit_timeout_sec: 120.0
     pre_orbit_hover_sec: 3.0
@@ -86,8 +86,8 @@ pcl_tree_mapper:
 
 dynamic_orbit_controller:
   ros__parameters:
-    orbit_radius: 3.0
-    orbit_altitude: 3.0
+    orbit_radius: 2.0
+    orbit_altitude: 2.0
     orbit_velocity: 0.30
     orbit_direction: 1.0
     lookahead_distance: 0.35
