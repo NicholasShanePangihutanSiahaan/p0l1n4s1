@@ -201,21 +201,41 @@ class FlightManager(Node):
 
     def _finish_service(self, kind: str, future) -> None:
         setattr(self, f"pending_{kind}", False)
+
         try:
             response = future.result()
+
             success = bool(
-                getattr(response, "success", getattr(response, "mode_sent", False))
+                getattr(
+                    response,
+                    "success",
+                    getattr(response, "mode_sent", False),
+                )
             )
+
+            result = int(getattr(response, "result", -1))
+
             if success:
-                self.get_logger().info(f"Perintah {kind} diterima autopilot.")
+                self.get_logger().info(
+                    f"Perintah {kind} diterima autopilot; "
+                    f"MAV_RESULT={result}."
+                )
             else:
                 if kind == "takeoff":
                     self.takeoff_latched = False
-                self.get_logger().warning(f"Perintah {kind} ditolak autopilot.")
-        except Exception as exc:  # noqa: BLE001
+
+                self.get_logger().warning(
+                    f"Perintah {kind} ditolak autopilot; "
+                    f"MAV_RESULT={result}."
+                )
+
+        except Exception as exc:
             if kind == "takeoff":
                 self.takeoff_latched = False
-            self.get_logger().error(f"Service {kind} gagal: {exc}")
+
+            self.get_logger().error(
+                f"Service {kind} gagal: {exc}"
+            )
 
     def pose_is_fresh(self) -> bool:
         return (
