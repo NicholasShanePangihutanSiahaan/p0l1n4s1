@@ -73,7 +73,7 @@ pcl_tree_mapper:
     pcl_topic: /perception/pcl/tracked_cylinders
     min_seen_count: 3
     max_missed_count: 20
-    min_confidence: 0.30
+    min_confidence: 0.25
     min_radius: 0.08
     max_radius: 1.20
     min_height: 0.8
