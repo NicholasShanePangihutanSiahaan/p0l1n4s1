@@ -1,75 +1,64 @@
 #!/usr/bin/env python3
-"""Forward ZED VSLAM pose to MAVROS External Navigation input.
-
-The coordinate convention conversion from ROS ENU to MAVLink/ArduPilot is
-handled by the MAVROS vision_pose_estimate plugin. Camera mounting offsets and
-EKF source selection must still be configured on the Pixhawk.
-"""
+"""Forward ZED pose to the MAVROS vision-pose input for ArduPilot ExternalNav."""
 
 import rclpy
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import qos_profile_sensor_data
 
 
 class VisionToMavros(Node):
-    def __init__(self) -> None:
-        super().__init__("vision_to_mavros")
+    def __init__(self):
+        super().__init__('vision_to_mavros')
+        self.declare_parameter('input_topic', '/zed/zed_node/pose')
+        self.declare_parameter('output_topic', '/mavros/vision_pose/pose')
+        self.declare_parameter('replace_zero_timestamp', True)
 
-        self.declare_parameter("input_pose_topic", "/zed/zed_node/pose")
-        self.declare_parameter("output_pose_topic", "/mavros/vision_pose/pose")
-        self.declare_parameter("replace_timestamp", False)
-
-        self.input_topic = str(self.get_parameter("input_pose_topic").value)
-        self.output_topic = str(self.get_parameter("output_pose_topic").value)
-        self.replace_timestamp = bool(self.get_parameter("replace_timestamp").value)
-
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
-        self.pub = self.create_publisher(PoseStamped, self.output_topic, 10)
-        self.sub = self.create_subscription(
-            PoseStamped, self.input_topic, self.pose_callback, qos
-        )
-        self.last_pose_time = None
-        self.create_timer(1.0, self.health_check)
+        input_topic = str(self.get_parameter('input_topic').value)
+        output_topic = str(self.get_parameter('output_topic').value)
+        self.replace_zero_timestamp = bool(
+            self.get_parameter('replace_zero_timestamp').value)
+        self.publisher = self.create_publisher(PoseStamped, output_topic, 10)
+        self.subscription = self.create_subscription(
+            PoseStamped, input_topic, self.pose_callback, qos_profile_sensor_data)
+        self.received = 0
+        self.last_received = None
+        self.create_timer(2.0, self.report)
         self.get_logger().info(
-            f"Jembatan VSLAM aktif: {self.input_topic} -> {self.output_topic}"
-        )
+            f'Bridge VisualOdom aktif: {input_topic} -> {output_topic}')
 
-    def pose_callback(self, msg: PoseStamped) -> None:
-        out = PoseStamped()
-        out.header = msg.header
-        out.pose = msg.pose
-        if self.replace_timestamp:
-            out.header.stamp = self.get_clock().now().to_msg()
-        self.last_pose_time = self.get_clock().now().nanoseconds * 1e-9
-        self.pub.publish(out)
+    def pose_callback(self, msg):
+        # MAVROS vision_pose menerima koordinat ROS ENU dan melakukan konversi
+        # MAVLink/NED di plugin. Pertahankan timestamp pengukuran ZED bila valid.
+        if self.replace_zero_timestamp and msg.header.stamp.sec == 0 and \
+                msg.header.stamp.nanosec == 0:
+            msg.header.stamp = self.get_clock().now().to_msg()
+        self.publisher.publish(msg)
+        self.received += 1
+        self.last_received = self.get_clock().now()
 
-    def health_check(self) -> None:
-        now = self.get_clock().now().nanoseconds * 1e-9
-        if self.last_pose_time is None:
-            self.get_logger().warning("Belum menerima pose VSLAM ZED.")
-        elif now - self.last_pose_time > 1.0:
-            self.get_logger().error(
-                f"Pose VSLAM stale selama {now - self.last_pose_time:.1f} detik."
-            )
+    def report(self):
+        if self.last_received is None:
+            self.get_logger().warning('Belum menerima pose ZED.')
+            return
+        age = (self.get_clock().now() - self.last_received).nanoseconds * 1e-9
+        if age > 1.0:
+            self.get_logger().warning(f'Pose ZED stale: {age:.2f} s.')
+        else:
+            self.get_logger().info(f'VisualOdom diteruskan; total={self.received}, age={age:.2f}s')
 
 
-def main(args=None) -> None:
+def main(args=None):
     rclpy.init(args=args)
     node = VisionToMavros()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    finally:
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+    node.destroy_node()
+    if rclpy.ok():
+        rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

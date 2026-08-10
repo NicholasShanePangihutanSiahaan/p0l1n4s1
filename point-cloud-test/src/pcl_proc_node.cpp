@@ -1,9 +1,7 @@
 #include <mutex>
 #include <vector>
 #include <memory>
-#include <string>
-#include <algorithm>
-#include <cmath>
+#include <cstdint>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -45,28 +43,19 @@ namespace point_cloud_test
     PclProcNode()
         : Node("pcl_proc_node")
     {
-      output_frame_ = declare_parameter<std::string>("output_frame", "odom");
-      process_period_ms_ = std::max(100, declare_parameter<int>("process_period_ms", 500));
-      max_buffered_pairs_ = static_cast<std::size_t>(
-          std::max(1, declare_parameter<int>("max_buffered_pairs", 2)));
-      voxel_leaf_size_ = static_cast<float>(
-          std::max(0.05, declare_parameter<double>("voxel_leaf_size", 0.20)));
-      max_merged_points_ = std::max(10000, declare_parameter<int>("max_merged_points", 600000));
-      sor_mean_k_ = std::max(5, declare_parameter<int>("sor_mean_k", 30));
-      sor_stddev_ = std::max(0.1, declare_parameter<double>("sor_stddev", 1.0));
-
-      const float mount_x = static_cast<float>(declare_parameter<double>("camera_mount_x", 0.0));
-      const float mount_y = static_cast<float>(declare_parameter<double>("camera_mount_y", 0.0));
-      const float mount_z = static_cast<float>(declare_parameter<double>("camera_mount_z", 0.0));
-      const float mount_roll = static_cast<float>(declare_parameter<double>("camera_mount_roll", 0.0));
-      const float mount_pitch = static_cast<float>(declare_parameter<double>("camera_mount_pitch", 0.0));
-      const float mount_yaw = static_cast<float>(declare_parameter<double>("camera_mount_yaw", 0.0));
-
-      camera_mount_translation_ = Eigen::Vector3f(mount_x, mount_y, mount_z);
-      camera_mount_rotation_ =
-          Eigen::AngleAxisf(mount_yaw, Eigen::Vector3f::UnitZ()).toRotationMatrix() *
-          Eigen::AngleAxisf(mount_pitch, Eigen::Vector3f::UnitY()).toRotationMatrix() *
-          Eigen::AngleAxisf(mount_roll, Eigen::Vector3f::UnitX()).toRotationMatrix();
+      this->declare_parameter("use_transform_pcl", true);
+      this->declare_parameter("min_sensor_range", 0.3);
+      this->declare_parameter("max_sensor_range", 15.0);
+      this->declare_parameter("voxel_leaf_size", 0.20);
+      this->declare_parameter("camera_offset_x", 0.0);
+      this->declare_parameter("camera_offset_y", 0.0);
+      this->declare_parameter("camera_offset_z", 0.0);
+      this->declare_parameter("camera_mount_roll", 0.0);
+      this->declare_parameter("camera_mount_pitch", 0.0);
+      this->declare_parameter("camera_mount_yaw", 0.0);
+      this->declare_parameter("processing_period_ms", 500);
+      this->declare_parameter("global_frame_id", "odom");
+      global_frame_id_ = this->get_parameter("global_frame_id").as_string();
 
       rclcpp::SubscriptionOptions sub_opts;
       rclcpp::CallbackGroup::SharedPtr sync_cb_group = create_callback_group(
@@ -76,7 +65,7 @@ namespace point_cloud_test
       cloud_sub_.subscribe(this, "/input_cloud",
                            rclcpp::SensorDataQoS().get_rmw_qos_profile(), sub_opts);
       odom_sub_.subscribe(this, "/odom",
-                          rclcpp::QoS(10).reliable().get_rmw_qos_profile(), sub_opts);
+                          rclcpp::SensorDataQoS().get_rmw_qos_profile(), sub_opts);
 
       sync_ = std::make_shared<Synchronizer>(
           SyncPolicy(100), cloud_sub_, odom_sub_);
@@ -95,7 +84,8 @@ namespace point_cloud_test
           "/global/cylinders", rclcpp::SensorDataQoS());
 
       timer_ = create_wall_timer(
-          std::chrono::milliseconds(process_period_ms_),
+          std::chrono::milliseconds(
+              this->get_parameter("processing_period_ms").as_int()),
           [this]()
           { timer_callback(); });
     }
@@ -106,16 +96,17 @@ namespace point_cloud_test
         const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg)
     {
       std::lock_guard<std::mutex> lock(swap_mutex_);
-      // Jangan biarkan frame menumpuk ketika backend PCL sedang sibuk.
-      // Cukup simpan dua pasangan cloud-odometry terbaru.
-      write_buffer_->push_back({cloud_msg, odom_msg});
-
-      if (write_buffer_->size() > max_buffered_pairs_)
+      // Detection must represent the current vehicle pose.  Keeping every
+      // camera frame made this buffer grow while PCL was busy and caused one
+      // cycle to merge clouds captured at different positions/altitudes.
+      // Retain only the newest synchronized pair; stale frames have no value
+      // for online obstacle/tree detection.
+      if (!write_buffer_->empty())
       {
-        write_buffer_->erase(
-            write_buffer_->begin(),
-            write_buffer_->end() - max_buffered_pairs_);
+        ++dropped_frame_count_;
+        write_buffer_->clear();
       }
+      write_buffer_->push_back({cloud_msg, odom_msg});
     }
 
     void timer_callback()
@@ -138,8 +129,9 @@ namespace point_cloud_test
       int total_point_clouds = 0;
       for (const auto &pair : *to_process)
       {
-        total_point_clouds += static_cast<int>(
-            pair.cloud->width * pair.cloud->height);
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::fromROSMsg(*pair.cloud, *cloud);
+        total_point_clouds += (cloud->width * cloud->height);
       }
 
       pcl::PointCloud<pcl::PointXYZ>::Ptr merged_cloud(
@@ -151,13 +143,41 @@ namespace point_cloud_test
       {
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
         pcl::fromROSMsg(*pair.cloud, *cloud);
+
+        // Gazebo represents pixels without a depth return as +/-Inf. These
+        // values must be removed before VoxelGrid; otherwise its bounds become
+        // infinite and the complete frame collapses into an invalid voxel.
+        pcl::PointCloud<pcl::PointXYZ>::Ptr valid_cloud(
+            new pcl::PointCloud<pcl::PointXYZ>);
+        valid_cloud->reserve(cloud->size());
+        const float min_range = get_parameter("min_sensor_range").as_double();
+        const float max_range = get_parameter("max_sensor_range").as_double();
+        for (const auto &point : cloud->points)
+        {
+          const float range = point.getVector3fMap().norm();
+          if (std::isfinite(point.x) && std::isfinite(point.y) &&
+              std::isfinite(point.z) &&
+              range >= min_range && range <= max_range)
+          {
+            valid_cloud->push_back(point);
+          }
+        }
+        valid_cloud->width = valid_cloud->size();
+        valid_cloud->height = 1;
+        valid_cloud->is_dense = true;
+        cloud = valid_cloud;
+
+        if (cloud->empty())
+        {
+          continue;
+        }
         pcl::RandomSample<pcl::PointXYZ> random_sampler;
 
-        if (total_point_clouds > max_merged_points_ * 2)
+        if (total_point_clouds > 1200000)
         {
           //RCLCPP_INFO(get_logger(), "Resampling");
           pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_sampled(new pcl::PointCloud<pcl::PointXYZ>);
-          unsigned int samples_per_pair = static_cast<unsigned int>(max_merged_points_ / to_process->size());
+          unsigned int samples_per_pair = (600000 / to_process->size());
           random_sampler.setInputCloud(cloud);
           random_sampler.setSample(samples_per_pair);
 
@@ -166,27 +186,78 @@ namespace point_cloud_test
         }
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::PointXYZ raw_min;
+        pcl::PointXYZ raw_max;
+        pcl::getMinMax3D(*cloud, raw_min, raw_max);
+        RCLCPP_DEBUG(
+            get_logger(),
+            "Raw bounds x=[%.2f, %.2f] y=[%.2f, %.2f] z=[%.2f, %.2f]",
+            raw_min.x, raw_max.x, raw_min.y, raw_max.y, raw_min.z, raw_max.z);
         pcl::VoxelGrid<pcl::PointXYZ> voxel;
         voxel.setInputCloud(cloud);
-        voxel.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, voxel_leaf_size_);
+        const float leaf = get_parameter("voxel_leaf_size").as_double();
+        voxel.setLeafSize(leaf, leaf, leaf);
         voxel.filter(*filtered);
+
+        RCLCPP_DEBUG(
+            get_logger(), "Cloud filter counts: raw=%zu voxel=%zu",
+            cloud->size(), filtered->size());
 
         pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
         sor.setInputCloud(filtered);
-        sor.setMeanK(sor_mean_k_);
-        sor.setStddevMulThresh(sor_stddev_);
-        sor.filter(*filtered);
+        sor.setMeanK(50);            // Default often used is 50
+        sor.setStddevMulThresh(1.0); // Default often used is 1.0
+        pcl::PointCloud<pcl::PointXYZ>::Ptr denoised(
+            new pcl::PointCloud<pcl::PointXYZ>);
+        sor.filter(*denoised);
+        // Gazebo RGBD clouds can be sparse after voxelization. In that case
+        // MeanK=50 rejects every point; retain the voxel cloud instead of
+        // stopping the complete detection pipeline.
+        if (!denoised->empty())
+        {
+          filtered = denoised;
+        }
+
+        RCLCPP_DEBUG(
+            get_logger(), "Cloud filter count after outlier removal: %zu",
+            filtered->size());
 
         const auto &pos = pair.odom->pose.pose.position;
         const auto &q = pair.odom->pose.pose.orientation;
         Eigen::Quaternionf rotation(q.w, q.x, q.y, q.z);
         Eigen::Matrix3f R = rotation.toRotationMatrix();
         Eigen::Vector3f t(pos.x, pos.y, pos.z);
+        Eigen::Vector3f camera_offset(
+            get_parameter("camera_offset_x").as_double(),
+            get_parameter("camera_offset_y").as_double(),
+            get_parameter("camera_offset_z").as_double());
+        const float mount_roll = get_parameter("camera_mount_roll").as_double();
+        const float mount_pitch = get_parameter("camera_mount_pitch").as_double();
+        const float mount_yaw = get_parameter("camera_mount_yaw").as_double();
+        const Eigen::Matrix3f mount_rotation =
+            (Eigen::AngleAxisf(mount_yaw, Eigen::Vector3f::UnitZ()) *
+             Eigen::AngleAxisf(mount_pitch, Eigen::Vector3f::UnitY()) *
+             Eigen::AngleAxisf(mount_roll, Eigen::Vector3f::UnitX())).toRotationMatrix();
+
+        bool is_use_transform_pcl = this->get_parameter("use_transform_pcl").as_bool();
 
         for (const auto &pt : filtered->points)
         {
+          if (!std::isfinite(pt.x) || !std::isfinite(pt.y) || !std::isfinite(pt.z)) {
+            continue;
+          }
           Eigen::Vector3f optical_pt(pt.x, pt.y, pt.z);
-          Eigen::Vector3f robot_pt = camera_mount_rotation_ * (R_optical_to_robot_ * optical_pt) + camera_mount_translation_;
+
+          if (optical_pt.norm() > max_range) {
+            continue; 
+          }
+          
+          Eigen::Vector3f robot_pt;
+          if (is_use_transform_pcl) {
+            robot_pt = mount_rotation * R_optical_to_robot_ * optical_pt + camera_offset;
+          } else {
+            robot_pt = optical_pt;
+          }
           Eigen::Vector3f global_pt = R * robot_pt + t;
           pcl::PointXYZ p;
           p.x = global_pt.x();
@@ -207,11 +278,30 @@ namespace point_cloud_test
       merged_cloud->height = 1;
       merged_cloud->is_dense = true;
 
+      if (merged_cloud->empty())
+      {
+        RCLCPP_WARN(get_logger(), "Point cloud empty after voxel/outlier filtering");
+        to_process->clear();
+        return;
+      }
+
+      pcl::PointXYZ merged_min;
+      pcl::PointXYZ merged_max;
+      pcl::getMinMax3D(*merged_cloud, merged_min, merged_max);
+      RCLCPP_DEBUG(
+          get_logger(),
+          "Merged cloud: %zu points, bounds x=[%.2f, %.2f] y=[%.2f, %.2f] z=[%.2f, %.2f]",
+          merged_cloud->size(), merged_min.x, merged_max.x, merged_min.y,
+          merged_max.y, merged_min.z, merged_max.z);
+
       auto time_ransac_start = std::chrono::high_resolution_clock::now();
       auto non_ground = processRANSAC(merged_cloud);
       if (!non_ground || non_ground->empty())
       {
-        RCLCPP_WARN(get_logger(), "Ground removal failed");
+        RCLCPP_WARN(
+            get_logger(),
+            "Ground removal failed (%zu points, z range %.2f..%.2f)",
+            merged_cloud->size(), merged_min.z, merged_max.z);
         to_process->clear();
         return;
       }
@@ -227,7 +317,7 @@ namespace point_cloud_test
       sensor_msgs::msg::PointCloud2 output_msg;
       pcl::toROSMsg(*trunk_filter, output_msg);
       output_msg.header.stamp = now();
-      output_msg.header.frame_id = output_frame_;
+      output_msg.header.frame_id = global_frame_id_;
 
       cloud_pub_->publish(output_msg);
 
@@ -245,11 +335,11 @@ namespace point_cloud_test
       {
         pcl_cstm_msg::msg::PointCloudArray cluster_msg;
         cluster_msg.header.stamp = now();
-        cluster_msg.header.frame_id = output_frame_;
+        cluster_msg.header.frame_id = global_frame_id_;
 
         pcl_cstm_msg::msg::VCylindersFit cyl_array_msg;
         cyl_array_msg.header.stamp = now();
-        cyl_array_msg.header.frame_id = output_frame_;
+        cyl_array_msg.header.frame_id = global_frame_id_;
 
         std::vector<CylinderParams> params_vec;
         params_vec.reserve(clusters.size());
@@ -262,7 +352,7 @@ namespace point_cloud_test
           sensor_msgs::msg::PointCloud2 cluster_cloud;
           pcl::toROSMsg(*cluster, cluster_cloud);
           cluster_cloud.header.stamp = now();
-          cluster_cloud.header.frame_id = output_frame_;
+          cluster_cloud.header.frame_id = global_frame_id_;
           cluster_msg.clouds.push_back(std::move(cluster_cloud));
 
           auto params = fitCylinderZAxis(cluster);
@@ -270,7 +360,7 @@ namespace point_cloud_test
 
           pcl_cstm_msg::msg::CylinderFit cyl_msg;
           cyl_msg.header.stamp = now();
-          cyl_msg.header.frame_id = output_frame_;
+          cyl_msg.header.frame_id = global_frame_id_;
           cyl_msg.radius = params.radius;
           cyl_msg.height = params.height;
           cyl_msg.confidence = params.confidence;
@@ -339,7 +429,7 @@ namespace point_cloud_test
 
         pcl_cstm_msg::msg::TrackedCylinderArray tracked_msg;
         tracked_msg.header.stamp = now();
-        tracked_msg.header.frame_id = output_frame_;
+        tracked_msg.header.frame_id = global_frame_id_;
 
         for (const auto &t : tracked)
         {
@@ -348,7 +438,7 @@ namespace point_cloud_test
           tc_msg.seen_count = t.seen_count;
           tc_msg.missed_count = t.missed_count;
           tc_msg.cylinder.header.stamp = now();
-          tc_msg.cylinder.header.frame_id = output_frame_;
+          tc_msg.cylinder.header.frame_id = global_frame_id_;
           tc_msg.cylinder.radius = t.radius;
           tc_msg.cylinder.height = t.height;
           tc_msg.cylinder.confidence = t.confidence;
@@ -405,24 +495,17 @@ namespace point_cloud_test
 
     std::shared_ptr<std::vector<CloudOdomPair>> write_buffer_{
         std::make_shared<std::vector<CloudOdomPair>>()};
-    std::shared_ptr<std::vector<CloudOdomPair>> process_buffer_{
+      std::shared_ptr<std::vector<CloudOdomPair>> process_buffer_{
         std::make_shared<std::vector<CloudOdomPair>>()};
     std::mutex swap_mutex_;
+    std::uint64_t dropped_frame_count_{0};
+    std::string global_frame_id_{"odom"};
 
     Eigen::Matrix3f R_optical_to_robot_{
         (Eigen::Matrix3f() << 0, 0, 1,
          -1, 0, 0,
          0, -1, 0)
             .finished()};
-    Eigen::Matrix3f camera_mount_rotation_{Eigen::Matrix3f::Identity()};
-    Eigen::Vector3f camera_mount_translation_{Eigen::Vector3f::Zero()};
-    std::string output_frame_{"odom"};
-    int process_period_ms_{500};
-    std::size_t max_buffered_pairs_{2};
-    float voxel_leaf_size_{0.20f};
-    int max_merged_points_{600000};
-    int sor_mean_k_{30};
-    double sor_stddev_{1.0};
 
     GlobalCylinderManager global_manager_{2.0f};
   };

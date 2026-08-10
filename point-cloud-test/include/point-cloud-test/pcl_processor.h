@@ -299,15 +299,6 @@ inline CylinderParams fitCylinderZAxis(
     return result;
   }
 
-  pcl::PointXYZ minPt, maxPt;
-  pcl::getMinMax3D(*cluster, minPt, maxPt);
-  
-  if (minPt.z >= 0.5f)
-  {
-    // Poin terendah tidak boleh melayang
-    return result; 
-  }
-
   // 1. Estimate Normals for the entire cluster
   pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> ne;
   pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(
@@ -330,7 +321,9 @@ inline CylinderParams fitCylinderZAxis(
   seg.setNormalDistanceWeight (0.1);
   seg.setMaxIterations(5000);
   seg.setDistanceThreshold(0.5);  
-  seg.setRadiusLimits(0.05, 0.4); 
+  // Model oil_palm Gazebo memiliki radius batang 0.45 m. Beri sedikit
+  // toleransi untuk noise depth dan hasil segmentasi parsial.
+  seg.setRadiusLimits(0.05, 0.60);
 
   seg.setAxis(Eigen::Vector3f(0.0, 0.0, 1.0));
   double toleransi_derajat = 30.0;

@@ -119,17 +119,12 @@ ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:115200 gcs_url:="udp://@(IP_
 
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i
 ```
-
-- Menyalakan Jembatan VSLAM
-```Bash
-ros2 run beehive_drone vision_to_mavros
-```
 ## 4. Menjalankan Seluruh Misi Menggunakan Launch File
 
 Karena seluruh node (termasuk Flight Manager, FSM, kontroler, pemetaan, dan analyzer) sudah didaftarkan ke dalam skrip launch, Anda cukup menjalankan satu perintah ini untuk menginisialisasi seluruh sistem secara bersamaan:
 ```Bash
 
-ros2 launch beehive_drone mission.launch.py
+ros2 launch beehive_drone real_mission.launch.py
 ```
 ## 5. Hasil Output Evaluasi Misi
 

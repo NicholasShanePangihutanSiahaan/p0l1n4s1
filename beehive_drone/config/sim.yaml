@@ -1,0 +1,72 @@
+pcl_proc_node:
+  ros__parameters:
+    use_transform_pcl: false
+    min_sensor_range: 0.3
+    max_sensor_range: 15.0
+    voxel_leaf_size: 0.20
+    processing_period_ms: 500
+    camera_offset_x: 0.0
+    camera_offset_y: 0.0
+    camera_offset_z: 0.0
+    camera_mount_roll: 0.0
+    camera_mount_pitch: 0.0
+    camera_mount_yaw: 0.0
+
+tree_mapper:
+  ros__parameters:
+    frame_id: odom
+    merge_distance: 1.0
+    minimum_seen_count: 3
+    min_radius: 0.10
+    max_radius: 0.65
+    min_height: 0.8
+    max_height: 8.0
+    max_trunk_base_height: 0.65
+    min_cylinder_confidence: 0.20
+    position_alpha: 0.25
+
+mission_state_machine:
+  ros__parameters:
+    flight_altitude: 2.0
+    approach_distance: 1.75
+    tree_distance_tolerance: 0.3
+    approach_goal_tolerance: 0.15
+    verification_retry_limit: 3
+    require_safety_monitor: false
+    auto_start: true
+    state_timeout: 120.0
+    pose_timeout: 5.0
+    abort_mode: ""
+
+dynamic_orbit_controller:
+  ros__parameters:
+    orbit_radius: 1.6
+    orbit_altitude: 2.0
+    orbit_velocity: 0.25
+    orbit_timeout: 90.0
+    radial_tolerance: 0.2
+    yaw_offset: 0.0
+    completion_tolerance_degrees: 3.0
+
+velocity_controller:
+  ros__parameters:
+    minimum_control_altitude: 0.20
+    # Harus lebih kecil dari approach_goal_tolerance (0.15 m), agar
+    # controller tidak berhenti sebelum FSM menyatakan titik tercapai.
+    goal_threshold: 0.08
+
+mission_safety_monitor:
+  ros__parameters:
+    pointcloud_topic: /zed2i/depth/points
+    range_topic: /mavros/rangefinder/rangefinder
+    require_rangefinder: false
+    pose_timeout: 5.0
+    cloud_timeout: 3.0
+
+mission_analyzer:
+  ros__parameters:
+    output_directory: ~/beehive_mission_reports/simulation
+    map_frame: odom
+    sample_period: 0.20
+    console_period: 2.0
+    autosave_period: 10.0

@@ -1,0 +1,94 @@
+pcl_proc_node:
+  ros__parameters:
+    # cloud_registered ZED memakai optical frame: X kanan, Y bawah, Z depan.
+    use_transform_pcl: true
+    min_sensor_range: 0.4
+    max_sensor_range: 12.0
+    voxel_leaf_size: 0.15
+    processing_period_ms: 500
+    global_frame_id: map
+    # Ukur offset origin base_link ke optical center ZED2i pada drone.
+    camera_offset_x: 0.0
+    camera_offset_y: 0.0
+    camera_offset_z: 0.0
+    camera_mount_roll: 0.0
+    camera_mount_pitch: 0.0
+    camera_mount_yaw: 0.0
+
+vision_to_mavros:
+  ros__parameters:
+    input_topic: /zed/zed_node/pose
+    output_topic: /mavros/vision_pose/pose
+    replace_zero_timestamp: true
+
+tree_mapper:
+  ros__parameters:
+    frame_id: map
+    merge_distance: 0.8
+    minimum_seen_count: 5
+    min_radius: 0.10
+    max_radius: 0.65
+    min_height: 1.0
+    max_height: 8.0
+    max_trunk_base_height: 0.75
+    min_cylinder_confidence: 0.25
+    position_alpha: 0.20
+
+mission_state_machine:
+  ros__parameters:
+    flight_altitude: 1.5
+    approach_distance: 2.0
+    tree_distance_tolerance: 0.5
+    approach_goal_tolerance: 0.15
+    verification_retry_limit: 3
+    require_safety_monitor: true
+    auto_start: false
+    state_timeout: 120.0
+    pose_timeout: 0.75
+    abort_mode: BRAKE
+
+dynamic_orbit_controller:
+  ros__parameters:
+    orbit_radius: 1.5
+    orbit_altitude: 1.5
+    orbit_velocity: 0.25
+    orbit_timeout: 120.0
+    radial_tolerance: 0.2
+    yaw_offset: 0.0
+    completion_tolerance_degrees: 0.2
+
+position_setpoint_controller:
+  ros__parameters:
+    publish_rate: 20.0
+    max_horizontal_step: 0.10
+    max_vertical_step: 0.05
+    target_timeout: 0.75
+    output_frame: map
+
+# Dipakai jika real launch dialihkan ke kontrol kecepatan untuk tuning.
+velocity_controller:
+  ros__parameters:
+    minimum_control_altitude: 0.20
+    # Sisakan margin terhadap approach_goal_tolerance (0.15 m).
+    goal_threshold: 0.10
+
+mission_safety_monitor:
+  ros__parameters:
+    pointcloud_topic: /zed/zed_node/point_cloud/cloud_registered
+    range_topic: /mavros/rangefinder/rangefinder
+    require_rangefinder: true
+    pose_timeout: 0.75
+    cloud_timeout: 2.0
+    state_timeout: 1.0
+    range_timeout: 1.0
+    range_arm_grace: 5.0
+    min_range: 0.08
+    max_range: 20.0
+
+mission_analyzer:
+  ros__parameters:
+    output_directory: ~/beehive_mission_reports/real
+    map_frame: map
+    sample_period: 0.20
+    console_period: 2.0
+    autosave_period: 10.0
