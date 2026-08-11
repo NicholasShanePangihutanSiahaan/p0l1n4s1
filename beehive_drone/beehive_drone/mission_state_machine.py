@@ -90,6 +90,7 @@ class MissionStateMachine(Node):
         self.hold_y = 0.0
         self.hold_yaw = 0.0
         self.navigation_altitude = None
+        self.abort_command_sent = False
         self.trees = []
         self.target_tree = None
 
@@ -173,6 +174,8 @@ class MissionStateMachine(Node):
     def transition(self, state):
         self.state = state
         self.state_since = self.get_clock().now()
+        if state == 'ABORT':
+            self.abort_command_sent = False
 
     def publish_setpoint_enabled(self, enabled):
         msg = Bool(); msg.data = enabled
@@ -481,7 +484,8 @@ class MissionStateMachine(Node):
 
         elif self.state == "POST_ORBIT_HOVER":
             self.publish_goal(self.hold_x, self.hold_y, self.hold_yaw)
-            self.hover_timer = self.hover_timer + 1 if self.is_hovering else 0
+            # Hold berbasis waktu; noise relative_alt tidak mengulang timer.
+            self.hover_timer += 1
 
             required_ticks = int(MissionConfig.POST_ORBIT_HOVER_TIME / 0.1)
             if self.hover_timer >= required_ticks:
@@ -501,7 +505,8 @@ class MissionStateMachine(Node):
 
             yaw_error = abs(self.normalize_angle(yaw_to_home - self.current_yaw()))
             aligned = yaw_error <= MissionConfig.HOME_YAW_TOLERANCE
-            self.hover_timer = self.hover_timer + 1 if aligned and self.is_hovering else 0
+            # Alignment hanya bergantung pada yaw, bukan noise altitude.
+            self.hover_timer = self.hover_timer + 1 if aligned else 0
 
             required_ticks = int(MissionConfig.HOME_ALIGN_TIME / 0.1)
             if self.hover_timer >= required_ticks:
@@ -553,7 +558,9 @@ class MissionStateMachine(Node):
         elif self.state == "HOME_HOVER":
             home_x, home_y, _ = self.home_pose
             self.publish_goal(home_x, home_y, self.hold_yaw)
-            self.hover_timer = self.hover_timer + 1 if self.is_hovering else 0
+            # Tahan posisi selama waktu yang ditentukan tanpa menjadikan
+            # relative_alt sebagai gate tambahan sebelum LAND.
+            self.hover_timer += 1
 
             required_ticks = int(MissionConfig.HOME_HOVER_TIME / 0.1)
             if self.hover_timer >= required_ticks:
@@ -603,9 +610,12 @@ class MissionStateMachine(Node):
             self.publish_setpoint_enabled(False)
             stop = Bool(); stop.data = False
             self.orbit_start_pub.publish(stop)
-            # BRAKE meminta flight controller menghentikan kendaraan saat estimasi masih tersedia.
-            mode = String(); mode.data = 'BRAKE'
-            self.cmd_mode_pub.publish(mode)
+            # Kirim BRAKE satu kali. Pengiriman terus-menerus akan melawan pilot
+            # yang mencoba mengambil alih mode melalui RC setelah abort.
+            if not self.abort_command_sent:
+                mode = String(); mode.data = 'BRAKE'
+                self.cmd_mode_pub.publish(mode)
+                self.abort_command_sent = True
 
         elif self.state == 'MANUAL_OVERRIDE':
             # Tidak mengirim setpoint/mode apa pun; pilot RC memegang kendali penuh.

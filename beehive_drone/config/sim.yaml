@@ -1,10 +1,11 @@
 pcl_proc_node:
   ros__parameters:
     use_transform_pcl: false
-    min_sensor_range: 0.3
-    max_sensor_range: 15.0
-    voxel_leaf_size: 0.20
+    min_sensor_range: 0.4
+    max_sensor_range: 12.0
+    voxel_leaf_size: 0.15
     processing_period_ms: 500
+    global_frame_id: odom
     camera_offset_x: 0.0
     camera_offset_y: 0.0
     camera_offset_z: 0.0
@@ -12,48 +13,60 @@ pcl_proc_node:
     camera_mount_pitch: 0.0
     camera_mount_yaw: 0.0
 
+flight_manager:
+  ros__parameters:
+    # SITL memakai pose lokal dengan origin tanah mendekati nol. Logika dan
+    # toleransinya sama dengan real, hanya sumber altitudenya yang berbeda.
+    altitude_source: local_position
+    hover_tolerance: 0.2
+
 tree_mapper:
   ros__parameters:
     frame_id: odom
-    merge_distance: 1.0
-    minimum_seen_count: 3
+    merge_distance: 0.8
+    minimum_seen_count: 5
     min_radius: 0.10
     max_radius: 0.65
-    min_height: 0.8
+    min_height: 1.0
     max_height: 8.0
-    max_trunk_base_height: 0.65
-    min_cylinder_confidence: 0.20
-    position_alpha: 0.25
+    max_trunk_base_height: 0.75
+    min_cylinder_confidence: 0.25
+    position_alpha: 0.20
 
 mission_state_machine:
   ros__parameters:
     flight_altitude: 1.5
-    approach_distance: 1.75
-    tree_distance_tolerance: 0.3
+    approach_distance: 2.0
+    tree_distance_tolerance: 0.5
     approach_goal_tolerance: 0.15
     verification_retry_limit: 3
+    # Watchdog tetap berjalan untuk diagnosis, tetapi tidak memaksa BRAKE pada
+    # jitter startup/clock Gazebo. Jalur controller dan algoritma misi tetap
+    # sama dengan real.
     require_safety_monitor: false
     auto_start: true
-    state_timeout: 120.0
+    state_timeout: 300.0
     pose_timeout: 5.0
-    abort_mode: ""
+    post_takeoff_hover_time: 2.0
+    abort_mode: BRAKE
 
 dynamic_orbit_controller:
   ros__parameters:
-    orbit_radius: 1.6
-    orbit_altitude: 2.0
+    orbit_radius: 1.5
+    orbit_altitude: 1.5
     orbit_velocity: 0.25
-    orbit_timeout: 90.0
-    radial_tolerance: 0.2
+    orbit_timeout: 180.0
+    radial_tolerance: 0.3
     yaw_offset: 0.0
-    completion_tolerance_degrees: 3.0
+    completion_tolerance_degrees: 2.0
 
-velocity_controller:
+position_setpoint_controller:
   ros__parameters:
-    minimum_control_altitude: 0.20
-    # Harus lebih kecil dari approach_goal_tolerance (0.15 m), agar
-    # controller tidak berhenti sebelum FSM menyatakan titik tercapai.
-    goal_threshold: 0.08
+    publish_rate: 20.0
+    max_horizontal_step: 0.10
+    max_vertical_step: 0.05
+    target_timeout: 0.75
+    output_frame: odom
 
 mission_safety_monitor:
   ros__parameters:
@@ -61,7 +74,12 @@ mission_safety_monitor:
     range_topic: /mavros/rangefinder/rangefinder
     require_rangefinder: false
     pose_timeout: 5.0
-    cloud_timeout: 3.0
+    cloud_timeout: 5.0
+    state_timeout: 5.0
+    range_timeout: 5.0
+    range_arm_grace: 5.0
+    min_range: 0.08
+    max_range: 20.0
 
 mission_analyzer:
   ros__parameters:
