@@ -21,6 +21,13 @@ vision_to_mavros:
     output_topic: /mavros/vision_pose/pose
     replace_zero_timestamp: true
 
+flight_manager:
+  ros__parameters:
+    # CommandTOL pada FC dikonfigurasi sebagai altitude terhadap home. Gunakan
+    # kembali altitude terhadap home yang diterbitkan FC untuk keputusan hover.
+    altitude_source: relative_alt
+    hover_tolerance: 0.2
+
 tree_mapper:
   ros__parameters:
     frame_id: map

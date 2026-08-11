@@ -2,7 +2,7 @@
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String, Bool, Float32
+from std_msgs.msg import String, Bool, Float32, Float64
 from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import State
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL
@@ -13,12 +13,19 @@ class FlightManager(Node):
         super().__init__("flight_manager")
 
         self.current_state = State()
-        self.current_alt = 0.0
-        self.last_pose = None
-        self.horizontal_speed = 0.0
-        self.vertical_speed = 0.0
+        self.local_alt = 0.0
+        self.relative_alt = 0.0
+        self.relative_alt_received = False
         self.target_takeoff_alt = 0.0
-        self.hover_tolerance = 0.2
+
+        self.declare_parameter("altitude_source", "local_position")
+        self.declare_parameter("hover_tolerance", 0.2)
+        self.altitude_source = str(self.get_parameter("altitude_source").value)
+        self.hover_tolerance = float(self.get_parameter("hover_tolerance").value)
+        if self.altitude_source not in ("local_position", "relative_alt"):
+            raise ValueError(
+                "altitude_source harus 'local_position' atau 'relative_alt'"
+            )
 
         # ==========================================
         # 1. MAVROS SUBSCRIBERS (Membaca dari Pixhawk)
@@ -33,6 +40,10 @@ class FlightManager(Node):
         )
         self.pose_sub = self.create_subscription(
             PoseStamped, "/mavros/local_position/pose", self.pose_callback, qos_sensor
+        )
+        self.relative_alt_sub = self.create_subscription(
+            Float64, "/mavros/global_position/rel_alt", self.relative_alt_callback,
+            qos_sensor
         )
 
         # ==========================================
@@ -70,25 +81,27 @@ class FlightManager(Node):
         # Timer berjalan pada 10Hz (0.1s) murni untuk mempublikasikan status sensor
         self.timer = self.create_timer(0.1, self.publish_telemetry)
 
-        self.get_logger().info("Flight Manager (HAL) Started - Menunggu Perintah Misi")
+        self.get_logger().info(
+            "Flight Manager aktif: sumber altitude=%s, toleransi hover=%.2fm"
+            % (self.altitude_source, self.hover_tolerance)
+        )
 
     # --- Callbacks Pembacaan Sensor ---
     def state_callback(self, msg):
         self.current_state = msg
 
     def pose_callback(self, msg):
-        self.current_alt = msg.pose.position.z
-        now = self.get_clock().now()
-        if self.last_pose is not None:
-            previous, previous_time = self.last_pose
-            dt = (now - previous_time).nanoseconds * 1e-9
-            if dt > 0.001:
-                dx = msg.pose.position.x - previous.pose.position.x
-                dy = msg.pose.position.y - previous.pose.position.y
-                dz = msg.pose.position.z - previous.pose.position.z
-                self.horizontal_speed = (dx * dx + dy * dy) ** 0.5 / dt
-                self.vertical_speed = abs(dz) / dt
-        self.last_pose = (msg, now)
+        self.local_alt = msg.pose.position.z
+
+    def relative_alt_callback(self, msg):
+        # Nilai ini diterbitkan oleh flight controller dan bereferensi ke home.
+        self.relative_alt = msg.data
+        self.relative_alt_received = True
+
+    def altitude_for_takeoff(self):
+        if self.altitude_source == "relative_alt":
+            return self.relative_alt if self.relative_alt_received else None
+        return self.local_alt
 
     # --- Callbacks Perintah FSM ---
     def cmd_mode_cb(self, msg):
@@ -139,16 +152,19 @@ class FlightManager(Node):
         msg_mode.data = self.current_state.mode
         self.pub_mode.publish(msg_mode)
 
+        current_alt = self.altitude_for_takeoff()
         msg_alt = Float32()
-        msg_alt.data = float(self.current_alt)
+        msg_alt.data = float(current_alt) if current_alt is not None else float("nan")
         self.pub_alt.publish(msg_alt)
         
-        # Logika khusus untuk melaporkan status HOVER yang stabil
+        # Sama seperti versi uji 0b8bedd: keputusan hover hanya berdasarkan
+        # selisih altitude. Velocity vision ZED sengaja tidak digunakan.
         is_hovering = False
-        if self.current_state.armed and self.target_takeoff_alt > 0:
-            if (abs(self.current_alt - self.target_takeoff_alt) < self.hover_tolerance
-                    and self.horizontal_speed < 0.20 and self.vertical_speed < 0.15):
-                is_hovering = True
+        if (self.current_state.armed
+                and current_alt is not None):
+            is_hovering = (
+                abs(current_alt - self.target_takeoff_alt) < self.hover_tolerance
+            )
         
         msg_hover = Bool()
         msg_hover.data = is_hovering
