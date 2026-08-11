@@ -160,7 +160,7 @@ class FlightManager(Node):
         # Sama seperti versi uji 0b8bedd: keputusan hover hanya berdasarkan
         # selisih altitude. Velocity vision ZED sengaja tidak digunakan.
         is_hovering = False
-        if (self.current_state.armed
+        if (self.current_state.armed and self.target_takeoff_alt > 0.0
                 and current_alt is not None):
             is_hovering = (
                 abs(current_alt - self.target_takeoff_alt) < self.hover_tolerance

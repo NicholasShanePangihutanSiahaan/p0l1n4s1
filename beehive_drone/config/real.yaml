@@ -52,6 +52,7 @@ mission_state_machine:
     auto_start: false
     state_timeout: 120.0
     pose_timeout: 0.75
+    post_takeoff_hover_time: 2.0
     abort_mode: BRAKE
 
 dynamic_orbit_controller:

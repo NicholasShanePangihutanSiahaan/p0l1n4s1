@@ -27,7 +27,7 @@ tree_mapper:
 
 mission_state_machine:
   ros__parameters:
-    flight_altitude: 2.0
+    flight_altitude: 1.5
     approach_distance: 1.75
     tree_distance_tolerance: 0.3
     approach_goal_tolerance: 0.15

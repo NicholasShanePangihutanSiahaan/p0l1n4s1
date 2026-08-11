@@ -205,7 +205,9 @@ class DynamicOrbitController(Node):
         
         sp.pose.position.x = target_x
         sp.pose.position.y = target_y
-        sp.pose.position.z = self.orbit_altitude
+        # Target dari FSM membawa koordinat Z lokal yang dicapai setelah
+        # CommandTOL. Hindari menganggap altitude terhadap home sebagai Z lokal.
+        sp.pose.position.z = self.tree_z
         
         sp.pose.orientation.x = qx
         sp.pose.orientation.y = qy

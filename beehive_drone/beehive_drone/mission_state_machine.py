@@ -54,6 +54,7 @@ class MissionStateMachine(Node):
         self.declare_parameter('auto_start', True)
         self.declare_parameter('state_timeout', 120.0)
         self.declare_parameter('pose_timeout', 1.0)
+        self.declare_parameter('post_takeoff_hover_time', 2.0)
         self.flight_altitude = float(self.get_parameter('flight_altitude').value)
         self.approach_safe_dist = float(
             self.get_parameter('approach_distance').value)
@@ -67,6 +68,8 @@ class MissionStateMachine(Node):
         self.auto_start = bool(self.get_parameter('auto_start').value)
         self.state_timeout = float(self.get_parameter('state_timeout').value)
         self.pose_timeout = float(self.get_parameter('pose_timeout').value)
+        self.post_takeoff_hover_time = float(
+            self.get_parameter('post_takeoff_hover_time').value)
 
         # ==========================================
         # Variabel State & Navigasi
@@ -86,6 +89,7 @@ class MissionStateMachine(Node):
         self.hold_x = 0.0
         self.hold_y = 0.0
         self.hold_yaw = 0.0
+        self.navigation_altitude = None
         self.trees = []
         self.target_tree = None
 
@@ -207,7 +211,12 @@ class MissionStateMachine(Node):
         
         goal.pose.position.x = float(x)
         goal.pose.position.y = float(y)
-        goal.pose.position.z = self.flight_altitude
+        # flight_altitude adalah tinggi terhadap home untuk CommandTOL. Setelah
+        # takeoff, pertahankan koordinat Z lokal yang benar-benar dicapai FC.
+        goal.pose.position.z = (
+            self.navigation_altitude
+            if self.navigation_altitude is not None else self.flight_altitude
+        )
         
         qx, qy, qz, qw = euler_to_quaternion(0, 0, yaw)
         goal.pose.orientation.x = qx
@@ -226,6 +235,7 @@ class MissionStateMachine(Node):
 
         active = self.state not in ('WAIT_START', 'DONE', 'ABORT', 'MANUAL_OVERRIDE')
         navigation_states = (
+            'POST_TAKEOFF_HOVER',
             'EXPLORE_ROW', 'APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT',
             'WAIT_ORBIT', 'POST_ORBIT_HOVER', 'ALIGN_HOME', 'END_OF_ROW',
             'CRAB_SCAN', 'RETURN_TO_HOME', 'HOME_HOVER', 'FINAL_SPIN')
@@ -300,10 +310,24 @@ class MissionStateMachine(Node):
 
         elif self.state == "WAIT_TAKEOFF":
             if self.is_hovering:
+                self.hold_x = cx
+                self.hold_y = cy
+                self.hold_yaw = self.current_yaw()
+                self.navigation_altitude = self.current_pose.pose.position.z
                 self.last_tree_x = cx
                 self.last_tree_y = cy
+                self.transition("POST_TAKEOFF_HOVER")
+                self.get_logger().info(
+                    "Altitude takeoff tercapai. Menahan posisi selama "
+                    f"{self.post_takeoff_hover_time:.1f} detik.")
+
+        elif self.state == "POST_TAKEOFF_HOVER":
+            self.publish_goal(self.hold_x, self.hold_y, self.hold_yaw)
+            if elapsed >= self.post_takeoff_hover_time:
                 self.transition("EXPLORE_ROW")
-                self.get_logger().info("Hover stabil tercapai. Mulai EXPLORE_ROW (Mencari Pohon).")
+                self.get_logger().info(
+                    "Hover pasca-takeoff selesai. Mulai EXPLORE_ROW "
+                    "(mencari pohon).")
 
         # --- FASE MISI UTAMA ---
         elif self.state == "EXPLORE_ROW":
@@ -411,7 +435,8 @@ class MissionStateMachine(Node):
             target_msg = Point()
             target_msg.x = self.target_tree.x
             target_msg.y = self.target_tree.y
-            target_msg.z = self.target_tree.z
+            # Kirim Z lokal misi, bukan tinggi/geometri pusat pohon.
+            target_msg.z = float(self.navigation_altitude)
             self.orbit_target_pub.publish(target_msg)
             
             start_msg = Bool(); start_msg.data = True
