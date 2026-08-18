@@ -14,10 +14,12 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import rclpy
-from geometry_msgs.msg import PoseArray, PoseStamped
+from geometry_msgs.msg import PoseArray, PoseStamped, TwistStamped
+from mavros_msgs.msg import ExtendedState, State, StatusText
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import String
+from sensor_msgs.msg import Range
+from std_msgs.msg import Bool, Float32, Float64, String
 from uav_interfaces.msg import TreeArray
 
 
@@ -67,12 +69,48 @@ class MissionAnalyzer(Node):
         self.min_altitude = math.inf
         self.final_saved = False
 
+        # Snapshot diagnostik pasif. Analyzer tidak pernah mengirim command atau
+        # setpoint; nilai yang belum pernah diterima disimpan sebagai NaN.
+        self.diagnostics = {
+            'connected': False, 'armed': False, 'flight_mode': '',
+            'landed_state': -1, 'rangefinder_m': math.nan,
+            'relative_alt_m': math.nan, 'local_vz_mps': math.nan,
+            'zed_z_m': math.nan, 'vision_z_m': math.nan,
+            'telemetry_altitude_m': math.nan, 'target_altitude_m': math.nan,
+            'setpoint_z_m': math.nan, 'is_hovering': False,
+        }
+        self.diagnostic_samples = []
+        self.fc_messages = []
+
         self.create_subscription(PoseStamped, '/mavros/local_position/pose',
                                  self.pose_callback, sensor_qos)
         self.create_subscription(TreeArray, '/map/trees', self.tree_callback, map_qos)
         self.create_subscription(String, '/mission/fsm_state', self.state_callback, 10)
         self.create_subscription(PoseArray, '/mission/inspection_waypoints',
                                  self.waypoint_callback, 10)
+        self.create_subscription(State, '/mavros/state', self.mavros_state_callback, 10)
+        self.create_subscription(ExtendedState, '/mavros/extended_state',
+                                 self.extended_state_callback, 10)
+        self.create_subscription(Range, '/mavros/rangefinder/rangefinder',
+                                 self.rangefinder_callback, sensor_qos)
+        self.create_subscription(Float64, '/mavros/global_position/rel_alt',
+                                 self.relative_alt_callback, sensor_qos)
+        self.create_subscription(TwistStamped, '/mavros/local_position/velocity_local',
+                                 self.velocity_callback, sensor_qos)
+        self.create_subscription(PoseStamped, '/mavros/vision_pose/pose',
+                                 self.vision_pose_callback, sensor_qos)
+        self.create_subscription(PoseStamped, '/zed/zed_node/pose',
+                                 self.zed_pose_callback, sensor_qos)
+        self.create_subscription(Float32, '/flight/telemetry/altitude',
+                                 self.telemetry_altitude_callback, 10)
+        self.create_subscription(Float32, '/flight/target_altitude',
+                                 self.target_altitude_callback, 10)
+        self.create_subscription(Bool, '/flight/telemetry/is_hovering',
+                                 self.hover_callback, 10)
+        self.create_subscription(PoseStamped, '/mavros/setpoint_position/local',
+                                 self.setpoint_callback, 10)
+        self.create_subscription(StatusText, '/mavros/statustext/recv',
+                                 self.statustext_callback, 10)
         self.create_timer(self.sample_period, self.sample)
         self.create_timer(self.console_period, self.print_status)
         self.create_timer(self.autosave_period, self.autosave)
@@ -123,6 +161,47 @@ class MissionAnalyzer(Node):
         self.waypoints = [(float(p.position.x), float(p.position.y),
                            float(p.position.z)) for p in msg.poses]
 
+    def mavros_state_callback(self, msg):
+        self.diagnostics['connected'] = bool(msg.connected)
+        self.diagnostics['armed'] = bool(msg.armed)
+        self.diagnostics['flight_mode'] = str(msg.mode)
+
+    def extended_state_callback(self, msg):
+        self.diagnostics['landed_state'] = int(msg.landed_state)
+
+    def rangefinder_callback(self, msg):
+        self.diagnostics['rangefinder_m'] = float(msg.range)
+
+    def relative_alt_callback(self, msg):
+        self.diagnostics['relative_alt_m'] = float(msg.data)
+
+    def velocity_callback(self, msg):
+        self.diagnostics['local_vz_mps'] = float(msg.twist.linear.z)
+
+    def vision_pose_callback(self, msg):
+        self.diagnostics['vision_z_m'] = float(msg.pose.position.z)
+
+    def zed_pose_callback(self, msg):
+        self.diagnostics['zed_z_m'] = float(msg.pose.position.z)
+
+    def telemetry_altitude_callback(self, msg):
+        self.diagnostics['telemetry_altitude_m'] = float(msg.data)
+
+    def target_altitude_callback(self, msg):
+        self.diagnostics['target_altitude_m'] = float(msg.data)
+
+    def hover_callback(self, msg):
+        self.diagnostics['is_hovering'] = bool(msg.data)
+
+    def setpoint_callback(self, msg):
+        self.diagnostics['setpoint_z_m'] = float(msg.pose.position.z)
+
+    def statustext_callback(self, msg):
+        self.fc_messages.append({
+            'time_s': self.elapsed(), 'severity': int(msg.severity),
+            'text': str(msg.text),
+        })
+
     def sample(self):
         if self.latest_pose is None:
             return
@@ -148,6 +227,19 @@ class MissionAnalyzer(Node):
             'state': self.current_state,
         }
         self.samples.append(row)
+        diag = {
+            'time_s': now, 'state': self.current_state,
+            'local_z_m': float(p.z), **self.diagnostics,
+        }
+        target = diag['target_altitude_m']
+        rel_alt = diag['relative_alt_m']
+        setpoint_z = diag['setpoint_z_m']
+        diag['relative_alt_error_m'] = (
+            target - rel_alt if math.isfinite(target) and math.isfinite(rel_alt)
+            else math.nan)
+        diag['local_z_error_m'] = (
+            setpoint_z - float(p.z) if math.isfinite(setpoint_z) else math.nan)
+        self.diagnostic_samples.append(diag)
         self.previous_sample = row
         self.max_altitude = max(self.max_altitude, float(p.z))
         self.min_altitude = min(self.min_altitude, float(p.z))
@@ -213,6 +305,17 @@ class MissionAnalyzer(Node):
                         'validated', 'orbit_count', 'time_s'])
         self.write_csv(self.output_dir / 'state_history.csv', self.state_events,
                        ['time_s', 'state'])
+        diagnostic_fields = [
+            'time_s', 'state', 'connected', 'armed', 'flight_mode',
+            'landed_state', 'rangefinder_m', 'relative_alt_m', 'local_z_m',
+            'local_vz_mps', 'zed_z_m', 'vision_z_m',
+            'telemetry_altitude_m', 'target_altitude_m', 'setpoint_z_m',
+            'is_hovering', 'relative_alt_error_m', 'local_z_error_m',
+        ]
+        self.write_csv(self.output_dir / 'altitude_diagnostics.csv',
+                       self.diagnostic_samples, diagnostic_fields)
+        self.write_csv(self.output_dir / 'fc_messages.csv', self.fc_messages,
+                       ['time_s', 'severity', 'text'])
         report = self.statistics()
         report['trees'] = sorted(self.trees.values(), key=lambda item: item['id'])
         report['state_history'] = self.state_events
@@ -285,6 +388,45 @@ class MissionAnalyzer(Node):
         fig.tight_layout()
         fig.savefig(self.output_dir / 'flight_profile.png', dpi=180)
         plt.close(fig)
+
+        if self.diagnostic_samples:
+            ds = self.diagnostic_samples
+            dts = [item['time_s'] for item in ds]
+            fig, (alt_ax, err_ax, vz_ax) = plt.subplots(
+                3, 1, figsize=(12, 10), sharex=True)
+            series = (
+                ('rangefinder_m', 'Rangefinder', 'tab:purple'),
+                ('relative_alt_m', 'Relative altitude', 'tab:blue'),
+                ('local_z_m', 'Local pose Z', 'tab:green'),
+                ('zed_z_m', 'ZED Z', 'tab:orange'),
+                ('vision_z_m', 'Vision pose Z', 'tab:brown'),
+                ('target_altitude_m', 'Target altitude', 'tab:red'),
+                ('setpoint_z_m', 'Setpoint Z', 'tab:pink'),
+            )
+            for key, label, color in series:
+                alt_ax.plot(dts, [item[key] for item in ds],
+                            label=label, color=color, linewidth=1.2)
+            alt_ax.set_ylabel('Altitude / Z (m)')
+            alt_ax.grid(True, alpha=0.3)
+            alt_ax.legend(loc='best', ncol=2, fontsize=8)
+            err_ax.plot(dts, [item['relative_alt_error_m'] for item in ds],
+                        label='Target - rel_alt', color='tab:red')
+            err_ax.plot(dts, [item['local_z_error_m'] for item in ds],
+                        label='Setpoint Z - local Z', color='tab:cyan')
+            err_ax.axhline(0.0, color='black', linewidth=0.7)
+            err_ax.set_ylabel('Error (m)')
+            err_ax.grid(True, alpha=0.3)
+            err_ax.legend(loc='best')
+            vz_ax.plot(dts, [item['local_vz_mps'] for item in ds],
+                       color='tab:orange', label='Local Vz')
+            vz_ax.axhline(0.0, color='black', linewidth=0.7)
+            vz_ax.set(xlabel='Waktu (s)', ylabel='Vz (m/s)')
+            vz_ax.grid(True, alpha=0.3)
+            vz_ax.legend(loc='best')
+            fig.suptitle('Diagnostik Altitude dan Estimasi Vertikal')
+            fig.tight_layout()
+            fig.savefig(self.output_dir / 'altitude_diagnostics.png', dpi=180)
+            plt.close(fig)
 
     def save_all(self, final=False):
         self.save_data_files()
