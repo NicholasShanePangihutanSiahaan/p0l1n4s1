@@ -18,7 +18,7 @@ from geometry_msgs.msg import PoseArray, PoseStamped, TwistStamped
 from mavros_msgs.msg import ExtendedState, State, StatusText
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Range
+from sensor_msgs.msg import FluidPressure, Range
 from std_msgs.msg import Bool, Float32, Float64, String
 from uav_interfaces.msg import TreeArray
 
@@ -32,6 +32,10 @@ class MissionAnalyzer(Node):
         self.declare_parameter('console_period', 2.0)
         self.declare_parameter('autosave_period', 10.0)
         self.declare_parameter('map_frame', 'odom')
+        self.declare_parameter('expected_takeoff_altitude', 1.5)
+        self.declare_parameter('topic_stale_threshold', 1.5)
+        self.declare_parameter('altitude_jump_threshold', 0.50)
+        self.declare_parameter('altitude_disagreement_threshold', 0.75)
 
         root = Path(os.path.expanduser(str(
             self.get_parameter('output_directory').value))).resolve()
@@ -42,6 +46,11 @@ class MissionAnalyzer(Node):
         self.sample_period = max(0.05, float(self.get_parameter('sample_period').value))
         self.console_period = max(0.5, float(self.get_parameter('console_period').value))
         self.autosave_period = max(2.0, float(self.get_parameter('autosave_period').value))
+        self.expected_takeoff_altitude = float(self.get_parameter('expected_takeoff_altitude').value)
+        self.topic_stale_threshold = max(0.1, float(self.get_parameter('topic_stale_threshold').value))
+        self.altitude_jump_threshold = max(0.05, float(self.get_parameter('altitude_jump_threshold').value))
+        self.altitude_disagreement_threshold = max(0.05, float(
+            self.get_parameter('altitude_disagreement_threshold').value))
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -75,12 +84,18 @@ class MissionAnalyzer(Node):
             'connected': False, 'armed': False, 'flight_mode': '',
             'landed_state': -1, 'rangefinder_m': math.nan,
             'relative_alt_m': math.nan, 'local_vz_mps': math.nan,
+            'static_pressure_pa': math.nan,
             'zed_z_m': math.nan, 'vision_z_m': math.nan,
             'telemetry_altitude_m': math.nan, 'target_altitude_m': math.nan,
             'setpoint_z_m': math.nan, 'is_hovering': False,
         }
         self.diagnostic_samples = []
         self.fc_messages = []
+        self.diagnostic_events = []
+        self.topic_last_seen = {}
+        self.altitude_baselines = {}
+        self.previous_diagnostic = None
+        self.last_event_time = {}
 
         self.create_subscription(PoseStamped, '/mavros/local_position/pose',
                                  self.pose_callback, sensor_qos)
@@ -93,6 +108,8 @@ class MissionAnalyzer(Node):
                                  self.extended_state_callback, 10)
         self.create_subscription(Range, '/mavros/rangefinder/rangefinder',
                                  self.rangefinder_callback, sensor_qos)
+        self.create_subscription(FluidPressure, '/mavros/imu/static_pressure',
+                                 self.pressure_callback, sensor_qos)
         self.create_subscription(Float64, '/mavros/global_position/rel_alt',
                                  self.relative_alt_callback, sensor_qos)
         self.create_subscription(TwistStamped, '/mavros/local_position/velocity_local',
@@ -126,6 +143,22 @@ class MissionAnalyzer(Node):
     def elapsed(self):
         return time.time() - self.start_wall
 
+    def mark_received(self, name):
+        self.topic_last_seen[name] = self.elapsed()
+
+    def topic_age(self, name, now):
+        stamp = self.topic_last_seen.get(name)
+        return now - stamp if stamp is not None else math.nan
+
+    def add_diagnostic_event(self, event, value=math.nan, detail='', cooldown=1.0):
+        now = self.elapsed()
+        if now - self.last_event_time.get(event, -math.inf) < cooldown:
+            return
+        self.last_event_time[event] = now
+        self.diagnostic_events.append({
+            'time_s': now, 'state': self.current_state, 'event': event,
+            'value': value, 'detail': detail})
+
     @staticmethod
     def yaw_from_quaternion(q):
         siny = 2.0 * (q.w * q.z + q.x * q.y)
@@ -133,6 +166,7 @@ class MissionAnalyzer(Node):
         return math.atan2(siny, cosy)
 
     def pose_callback(self, msg):
+        self.mark_received('local_pose')
         self.latest_pose = msg.pose
         self.latest_pose_stamp = msg.header.stamp
         if self.home is None:
@@ -167,38 +201,53 @@ class MissionAnalyzer(Node):
                            float(p.position.z)) for p in msg.poses]
 
     def mavros_state_callback(self, msg):
+        self.mark_received('mavros_state')
         self.diagnostics['connected'] = bool(msg.connected)
         self.diagnostics['armed'] = bool(msg.armed)
         self.diagnostics['flight_mode'] = str(msg.mode)
 
     def extended_state_callback(self, msg):
+        self.mark_received('extended_state')
         self.diagnostics['landed_state'] = int(msg.landed_state)
 
     def rangefinder_callback(self, msg):
+        self.mark_received('rangefinder')
         self.diagnostics['rangefinder_m'] = float(msg.range)
 
+    def pressure_callback(self, msg):
+        self.mark_received('static_pressure')
+        self.diagnostics['static_pressure_pa'] = float(msg.fluid_pressure)
+
     def relative_alt_callback(self, msg):
+        self.mark_received('relative_alt')
         self.diagnostics['relative_alt_m'] = float(msg.data)
 
     def velocity_callback(self, msg):
+        self.mark_received('local_velocity')
         self.diagnostics['local_vz_mps'] = float(msg.twist.linear.z)
 
     def vision_pose_callback(self, msg):
+        self.mark_received('vision_pose')
         self.diagnostics['vision_z_m'] = float(msg.pose.position.z)
 
     def zed_pose_callback(self, msg):
+        self.mark_received('zed_pose')
         self.diagnostics['zed_z_m'] = float(msg.pose.position.z)
 
     def telemetry_altitude_callback(self, msg):
+        self.mark_received('telemetry_altitude')
         self.diagnostics['telemetry_altitude_m'] = float(msg.data)
 
     def target_altitude_callback(self, msg):
+        self.mark_received('target_altitude')
         self.diagnostics['target_altitude_m'] = float(msg.data)
 
     def hover_callback(self, msg):
+        self.mark_received('hover')
         self.diagnostics['is_hovering'] = bool(msg.data)
 
     def setpoint_callback(self, msg):
+        self.mark_received('setpoint')
         self.diagnostics['setpoint_z_m'] = float(msg.pose.position.z)
 
     def statustext_callback(self, msg):
@@ -236,6 +285,31 @@ class MissionAnalyzer(Node):
             'time_s': now, 'state': self.current_state,
             'local_z_m': float(p.z), **self.diagnostics,
         }
+        sources = {
+            'relative_alt_m': diag['relative_alt_m'],
+            'local_z_m': diag['local_z_m'],
+            'zed_z_m': diag['zed_z_m'],
+            'vision_z_m': diag['vision_z_m'],
+        }
+        for key, value in sources.items():
+            if key not in self.altitude_baselines and math.isfinite(value):
+                self.altitude_baselines[key] = value
+            baseline = self.altitude_baselines.get(key, math.nan)
+            diag[key.replace('_m', '_from_home_m')] = (
+                value - baseline if math.isfinite(value) and math.isfinite(baseline)
+                else math.nan)
+        diag['expected_takeoff_altitude_m'] = self.expected_takeoff_altitude
+        diag['static_pressure_hpa'] = diag['static_pressure_pa'] / 100.0
+        tracked_topics = (
+            'local_pose', 'mavros_state', 'extended_state', 'rangefinder',
+            'static_pressure', 'relative_alt', 'local_velocity', 'vision_pose',
+            'zed_pose', 'telemetry_altitude', 'target_altitude', 'hover', 'setpoint')
+        for name in tracked_topics:
+            age = self.topic_age(name, now)
+            diag[f'{name}_received'] = name in self.topic_last_seen
+            diag[f'{name}_age_s'] = age
+            diag[f'{name}_stale'] = (
+                not math.isfinite(age) or age > self.topic_stale_threshold)
         target = diag['target_altitude_m']
         rel_alt = diag['relative_alt_m']
         setpoint_z = diag['setpoint_z_m']
@@ -244,6 +318,30 @@ class MissionAnalyzer(Node):
             else math.nan)
         diag['local_z_error_m'] = (
             setpoint_z - float(p.z) if math.isfinite(setpoint_z) else math.nan)
+        diag['rel_local_home_disagreement_m'] = (
+            diag['relative_alt_from_home_m'] - diag['local_z_from_home_m']
+            if math.isfinite(diag['relative_alt_from_home_m']) else math.nan)
+        diag['rel_vision_home_disagreement_m'] = (
+            diag['relative_alt_from_home_m'] - diag['vision_z_from_home_m']
+            if math.isfinite(diag['relative_alt_from_home_m']) and
+            math.isfinite(diag['vision_z_from_home_m']) else math.nan)
+        if self.previous_diagnostic is not None:
+            for key in ('relative_alt_m', 'local_z_m', 'vision_z_m',
+                        'static_pressure_hpa'):
+                old = self.previous_diagnostic.get(key, math.nan)
+                new = diag.get(key, math.nan)
+                delta = new - old if math.isfinite(old) and math.isfinite(new) else math.nan
+                threshold = 0.20 if key == 'static_pressure_hpa' else self.altitude_jump_threshold
+                if math.isfinite(delta) and abs(delta) >= threshold:
+                    self.add_diagnostic_event(
+                        f'{key}_jump', delta, f'{old:.3f} -> {new:.3f}', cooldown=0.0)
+        disagreement = diag['rel_local_home_disagreement_m']
+        if (math.isfinite(disagreement) and
+                abs(disagreement) >= self.altitude_disagreement_threshold):
+            self.add_diagnostic_event(
+                'relative_local_altitude_disagreement', disagreement,
+                'relative_alt_from_home - local_z_from_home')
+        self.previous_diagnostic = dict(diag)
         self.diagnostic_samples.append(diag)
         self.previous_sample = row
         self.max_altitude = max(self.max_altitude, float(p.z))
@@ -312,15 +410,30 @@ class MissionAnalyzer(Node):
                        ['time_s', 'state'])
         diagnostic_fields = [
             'time_s', 'state', 'connected', 'armed', 'flight_mode',
-            'landed_state', 'rangefinder_m', 'relative_alt_m', 'local_z_m',
+            'landed_state', 'rangefinder_m', 'static_pressure_pa',
+            'static_pressure_hpa', 'relative_alt_m', 'local_z_m',
             'local_vz_mps', 'zed_z_m', 'vision_z_m',
             'telemetry_altitude_m', 'target_altitude_m', 'setpoint_z_m',
-            'is_hovering', 'relative_alt_error_m', 'local_z_error_m',
+            'expected_takeoff_altitude_m', 'is_hovering',
+            'relative_alt_from_home_m', 'local_z_from_home_m',
+            'zed_z_from_home_m', 'vision_z_from_home_m',
+            'relative_alt_error_m', 'local_z_error_m',
+            'rel_local_home_disagreement_m', 'rel_vision_home_disagreement_m',
         ]
+        for name in (
+                'local_pose', 'mavros_state', 'extended_state', 'rangefinder',
+                'static_pressure', 'relative_alt', 'local_velocity', 'vision_pose',
+                'zed_pose', 'telemetry_altitude', 'target_altitude', 'hover',
+                'setpoint'):
+            diagnostic_fields.extend(
+                [f'{name}_received', f'{name}_age_s', f'{name}_stale'])
         self.write_csv(self.output_dir / 'altitude_diagnostics.csv',
                        self.diagnostic_samples, diagnostic_fields)
         self.write_csv(self.output_dir / 'fc_messages.csv', self.fc_messages,
                        ['time_s', 'severity', 'text'])
+        self.write_csv(self.output_dir / 'diagnostic_events.csv',
+                       self.diagnostic_events,
+                       ['time_s', 'state', 'event', 'value', 'detail'])
         report = self.statistics()
         report['trees'] = sorted(self.trees.values(), key=lambda item: item['id'])
         report['state_history'] = self.state_events
@@ -407,6 +520,7 @@ class MissionAnalyzer(Node):
                 ('vision_z_m', 'Vision pose Z', 'tab:brown'),
                 ('target_altitude_m', 'Target altitude', 'tab:red'),
                 ('setpoint_z_m', 'Setpoint Z', 'tab:pink'),
+                ('expected_takeoff_altitude_m', 'Expected takeoff', 'black'),
             )
             for key, label, color in series:
                 alt_ax.plot(dts, [item[key] for item in ds],
@@ -431,6 +545,17 @@ class MissionAnalyzer(Node):
             fig.suptitle('Diagnostik Altitude dan Estimasi Vertikal')
             fig.tight_layout()
             fig.savefig(self.output_dir / 'altitude_diagnostics.png', dpi=180)
+            plt.close(fig)
+
+            fig, pressure_ax = plt.subplots(figsize=(12, 5))
+            pressure_ax.plot(dts, [item['static_pressure_hpa'] for item in ds],
+                             color='tab:blue', label='Static pressure')
+            pressure_ax.set(xlabel='Waktu (s)', ylabel='Tekanan (hPa)',
+                            title='Tekanan Barometer FC')
+            pressure_ax.grid(True, alpha=0.3)
+            pressure_ax.legend(loc='best')
+            fig.tight_layout()
+            fig.savefig(self.output_dir / 'barometer_pressure.png', dpi=180)
             plt.close(fig)
 
     def save_all(self, final=False):

@@ -51,7 +51,7 @@ mission_state_machine:
     # Mission-first: monitor tetap mencatat diagnosis, tetapi cloud/range
     # dropout tidak langsung membatalkan misi dan memaksa BRAKE.
     require_safety_monitor: false
-    auto_start: true
+    auto_start: false
     state_timeout: 300.0
     pose_timeout: 5.0
     post_takeoff_hover_time: 2.0
