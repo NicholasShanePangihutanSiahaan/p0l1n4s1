@@ -17,8 +17,8 @@ def generate_launch_description():
                               default_value='/zed/zed_node/point_cloud/cloud_registered'),
         DeclareLaunchArgument('odometry_topic', default_value='/mavros/local_position/odom'),
         DeclareLaunchArgument(
-            'auto_start', default_value='false',
-            description='true: otomatis GUIDED/arm/takeoff setelah semua sensor preflight sehat'),
+            'auto_start', default_value='true',
+            description='true: otomatis GUIDED/arm/takeoff setelah local pose tersedia'),
         Node(package='beehive_drone', executable='vision_to_mavros',
              parameters=[config], output='screen'),
      #    Node(package='point-cloud-test', executable='pcl_proc_node', output='screen',

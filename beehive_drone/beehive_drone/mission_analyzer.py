@@ -105,6 +105,11 @@ class MissionAnalyzer(Node):
                                  self.telemetry_altitude_callback, 10)
         self.create_subscription(Float32, '/flight/target_altitude',
                                  self.target_altitude_callback, 10)
+        # Mission utama mengirim target takeoff pada topic command ini. Dengarkan
+        # juga topic tersebut agar target/error tetap tercatat tanpa perlu
+        # mengubah flight_manager.
+        self.create_subscription(Float32, '/flight/cmd/takeoff',
+                                 self.target_altitude_callback, 10)
         self.create_subscription(Bool, '/flight/telemetry/is_hovering',
                                  self.hover_callback, 10)
         self.create_subscription(PoseStamped, '/mavros/setpoint_position/local',
