@@ -59,6 +59,9 @@ class MissionAnalyzer(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST, depth=1)
+        qos_recv = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST, depth=20)
 
         self.start_wall = time.time()
         self.latest_pose = None
@@ -132,7 +135,7 @@ class MissionAnalyzer(Node):
         self.create_subscription(PoseStamped, '/mavros/setpoint_position/local',
                                  self.setpoint_callback, 10)
         self.create_subscription(StatusText, '/mavros/statustext/recv',
-                                 self.statustext_callback, 10)
+                                 self.statustext_callback, qos_recv)
         self.create_timer(self.sample_period, self.sample)
         self.create_timer(self.console_period, self.print_status)
         self.create_timer(self.autosave_period, self.autosave)
