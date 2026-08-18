@@ -21,14 +21,15 @@ def generate_launch_description():
             description='true: otomatis GUIDED/arm/takeoff setelah semua sensor preflight sehat'),
         Node(package='beehive_drone', executable='vision_to_mavros',
              parameters=[config], output='screen'),
-        Node(package='point-cloud-test', executable='pcl_proc_node', output='screen',
-             remappings=[('/input_cloud', cloud), ('/odom', odom),
-                         ('/output_cloud', '/perception/pcl/non_ground'),
-                         ('/clusters', '/perception/pcl/clusters'),
-                         ('/cylinders', '/perception/pcl/cylinders'),
-                         ('/global/cylinders', '/global_cylinders')],
+     #    Node(package='point-cloud-test', executable='pcl_proc_node', output='screen',
+          #   remappings=[('/input_cloud', cloud), ('/odom', odom),
+                         # ('/output_cloud', '/perception/pcl/non_ground'),
+                         # ('/clusters', '/perception/pcl/clusters'),
+                         # ('/cylinders', '/perception/pcl/cylinders'),
+                         # ('/global/cylinders', '/global_cylinders')],
              # Parameter transform ZED dan filter PCL berada di real.yaml.
-             parameters=[config]),
+             #parameters=[config]
+             # )
         Node(package='beehive_drone', executable='tree_mapper', parameters=[config], output='screen'),
         Node(package='beehive_drone', executable='vortex_avoidance_controller', output='screen'),
         Node(package='beehive_drone', executable='dynamic_orbit_controller', parameters=[config], output='screen'),
