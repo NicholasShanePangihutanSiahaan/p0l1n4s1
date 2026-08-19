@@ -58,6 +58,7 @@ class DynamicOrbitController(Node):
         self.accumulated_angle = 0.0
         self.orbit_start_time = None
         self.tracking_started = False
+        self.command_angle = None
 
         # ==========================================
         # Subscriber
@@ -117,6 +118,7 @@ class DynamicOrbitController(Node):
             self.last_angle = None
             self.orbit_start_time = self.get_clock().now()
             self.tracking_started = False
+            self.command_angle = None
             self.get_logger().info(f"Memulai orbit pada pohon di ({self.tree_x:.2f}, {self.tree_y:.2f})")
         elif not msg.data and self.is_orbiting:
             self.is_orbiting = False
@@ -174,17 +176,27 @@ class DynamicOrbitController(Node):
         else:
             self.publish_status("IN_PROGRESS")
 
-        # 4. Kalkulasi Setpoint Target Posisi (Translasi)
-        # Gunakan konsep "Carrot on a Stick" (Umpan Jauh).
-        # Target harus dilempar cukup jauh ke depan agar tidak terkena auto-rem (threshold 0.5m) dari velocity_controller.
-        lookahead_distance = max(0.5, self.orbit_velocity * 1.5)
-        lookahead_angle = lookahead_distance / self.orbit_radius
-        
-        target_angle = current_angle + lookahead_angle # Bergerak CCW (Berlawanan arah jarum jam)
+        # 4. Fase target bergerak dengan omega=v/r. Dengan demikian parameter
+        # orbit_velocity benar-benar menentukan laju lintasan, bukan sekadar
+        # mengubah jarak carrot yang terus dihitung ulang dari posisi drone.
+        omega = max(0.01, self.orbit_velocity) / max(0.10, self.orbit_radius)
+        if self.command_angle is None:
+            self.command_angle = current_angle
+        self.command_angle += omega * self.dt
+        lead = self.command_angle - current_angle
+        while lead > math.pi:
+            lead -= 2.0 * math.pi
+        while lead < -math.pi:
+            lead += 2.0 * math.pi
+        # Jangan biarkan target virtual meninggalkan kendaraan terlalu jauh.
+        max_lead = math.radians(40.0)
+        if lead > max_lead:
+            self.command_angle = current_angle + max_lead
+        elif lead < 0.0:
+            self.command_angle = current_angle + omega * self.dt
 
-        # Koreksi Spiral: Jika drone terlempar menjauh, tarik kembali perlahan (P-Controller kecil)
-        target_r = current_r + (self.orbit_radius - current_r) * 0.15
-        target_r = max(self.orbit_radius, target_r)
+        target_angle = self.command_angle  # CCW
+        target_r = self.orbit_radius
 
         target_x = self.tree_x + target_r * math.cos(target_angle)
         target_y = self.tree_y + target_r * math.sin(target_angle)

@@ -251,7 +251,11 @@ class MissionStateMachine(Node):
         if active and self.require_safety and not self.safety_ok:
             self.transition('ABORT')
             self.get_logger().error(f'ABORT watchdog: {self.safety_reason}')
-        if active and self.is_armed and self.current_mode not in ('GUIDED', ''):
+        # ArduPilot berpindah dari GUIDED ke LAND setelah command landing. LAND
+        # adalah bagian normal misi, bukan takeover pilot.
+        expected_land_mode = self.state == 'LANDING' and self.current_mode == 'LAND'
+        if active and self.is_armed and not expected_land_mode and \
+                self.current_mode not in ('GUIDED', ''):
             self.transition('MANUAL_OVERRIDE')
             self.get_logger().warning(f'Manual takeover terdeteksi: mode={self.current_mode}')
         elapsed = (self.get_clock().now() - self.state_since).nanoseconds * 1e-9
