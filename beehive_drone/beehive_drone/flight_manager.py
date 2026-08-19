@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
+import math
+import time
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Bool, Float32, Float64
 from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import State
 from mavros_msgs.srv import CommandBool, SetMode, CommandTOL
+from sensor_msgs.msg import Range
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 class FlightManager(Node):
@@ -16,15 +19,28 @@ class FlightManager(Node):
         self.local_alt = 0.0
         self.relative_alt = 0.0
         self.relative_alt_received = False
+        self.rangefinder_alt = 0.0
+        self.rangefinder_received_at = None
         self.target_takeoff_alt = 0.0
 
         self.declare_parameter("altitude_source", "local_position")
         self.declare_parameter("hover_tolerance", 0.2)
+        self.declare_parameter("rangefinder_topic", "/mavros/rangefinder/rangefinder")
+        self.declare_parameter("rangefinder_timeout", 1.0)
+        self.declare_parameter("rangefinder_min_valid", 0.08)
+        self.declare_parameter("rangefinder_max_valid", 20.0)
+        self.declare_parameter("rangefinder_altitude_offset", 0.0)
         self.altitude_source = str(self.get_parameter("altitude_source").value)
         self.hover_tolerance = float(self.get_parameter("hover_tolerance").value)
-        if self.altitude_source not in ("local_position", "relative_alt"):
+        self.rangefinder_topic = str(self.get_parameter("rangefinder_topic").value)
+        self.rangefinder_timeout = max(0.1, float(self.get_parameter("rangefinder_timeout").value))
+        self.rangefinder_min_valid = float(self.get_parameter("rangefinder_min_valid").value)
+        self.rangefinder_max_valid = float(self.get_parameter("rangefinder_max_valid").value)
+        self.rangefinder_altitude_offset = float(
+            self.get_parameter("rangefinder_altitude_offset").value)
+        if self.altitude_source not in ("local_position", "relative_alt", "rangefinder"):
             raise ValueError(
-                "altitude_source harus 'local_position' atau 'relative_alt'"
+                "altitude_source harus 'local_position', 'relative_alt', atau 'rangefinder'"
             )
 
         # ==========================================
@@ -44,6 +60,9 @@ class FlightManager(Node):
         self.relative_alt_sub = self.create_subscription(
             Float64, "/mavros/global_position/rel_alt", self.relative_alt_callback,
             qos_sensor
+        )
+        self.rangefinder_sub = self.create_subscription(
+            Range, self.rangefinder_topic, self.rangefinder_callback, qos_sensor
         )
 
         # ==========================================
@@ -98,7 +117,27 @@ class FlightManager(Node):
         self.relative_alt = msg.data
         self.relative_alt_received = True
 
+    def rangefinder_callback(self, msg):
+        value = float(msg.range)
+        lower = max(self.rangefinder_min_valid,
+                    float(msg.min_range) if msg.min_range > 0.0 else 0.0)
+        upper = self.rangefinder_max_valid
+        if msg.max_range > 0.0:
+            upper = min(upper, float(msg.max_range))
+        if math.isfinite(value) and lower <= value <= upper:
+            self.rangefinder_alt = value + self.rangefinder_altitude_offset
+            self.rangefinder_received_at = time.monotonic()
+
+    def valid_rangefinder_altitude(self):
+        if self.rangefinder_received_at is None:
+            return None
+        if time.monotonic() - self.rangefinder_received_at > self.rangefinder_timeout:
+            return None
+        return self.rangefinder_alt
+
     def altitude_for_takeoff(self):
+        if self.altitude_source == "rangefinder":
+            return self.valid_rangefinder_altitude()
         if self.altitude_source == "relative_alt":
             return self.relative_alt if self.relative_alt_received else None
         return self.local_alt

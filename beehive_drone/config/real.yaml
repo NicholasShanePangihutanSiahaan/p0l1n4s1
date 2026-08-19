@@ -23,10 +23,15 @@ vision_to_mavros:
 
 flight_manager:
   ros__parameters:
-    # CommandTOL pada FC dikonfigurasi sebagai altitude terhadap home. Gunakan
-    # kembali altitude terhadap home yang diterbitkan FC untuk keputusan hover.
-    altitude_source: relative_alt
+    # Gate takeoff/hover menggunakan tinggi AGL dari lidar bawah.
+    altitude_source: rangefinder
     hover_tolerance: 0.2
+    rangefinder_topic: /mavros/rangefinder/rangefinder
+    rangefinder_timeout: 1.0
+    rangefinder_min_valid: 0.08
+    rangefinder_max_valid: 20.0
+    # Offset vertikal base_link terhadap pusat lidar, jika diperlukan.
+    rangefinder_altitude_offset: 0.0
 
 tree_mapper:
   ros__parameters:
@@ -51,7 +56,7 @@ mission_state_machine:
     # Mission-first: monitor tetap mencatat diagnosis, tetapi cloud/range
     # dropout tidak langsung membatalkan misi dan memaksa BRAKE.
     require_safety_monitor: false
-    auto_start: false
+    auto_start: true
     state_timeout: 300.0
     pose_timeout: 5.0
     post_takeoff_hover_time: 2.0
@@ -87,7 +92,7 @@ mission_safety_monitor:
     pointcloud_topic: /zed/zed_node/point_cloud/cloud_registered
     range_topic: /mavros/rangefinder/rangefinder
     # Diagnostik saja selama tahap mission-first.
-    require_rangefinder: false
+    require_rangefinder: true
     pose_timeout: 5.0
     cloud_timeout: 5.0
     state_timeout: 5.0
