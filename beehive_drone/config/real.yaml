@@ -28,7 +28,7 @@ flight_manager:
     hover_tolerance: 0.2
     rangefinder_topic: /mavros/rangefinder/rangefinder
     rangefinder_timeout: 1.0
-    rangefinder_min_valid: 0.08
+    rangefinder_min_valid: 0.001
     rangefinder_max_valid: 20.0
     # Offset vertikal base_link terhadap pusat lidar, jika diperlukan.
     rangefinder_altitude_offset: 0.0
