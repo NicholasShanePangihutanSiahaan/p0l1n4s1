@@ -1,4 +1,5 @@
 from launch import LaunchDescription
+from launch.actions import TimerAction
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 import os
@@ -15,8 +16,13 @@ def generate_launch_description():
                            ('/global/cylinders', '/global_cylinders')],
                parameters=[config])
     sim_pose_remap = [('/mavros/local_position/pose', '/simulation/local_position/pose')]
+    mission_state_machine = Node(
+        package='beehive_drone', executable='mission_state_machine',
+        parameters=[config], remappings=sim_pose_remap, output='screen')
     return LaunchDescription([
         Node(package='beehive_drone', executable='sim_external_odometry', output='screen'),
+        Node(package='beehive_drone', executable='sim_rangefinder_bridge',
+             parameters=[config], output='screen'),
         pcl,
         Node(package='beehive_drone', executable='tree_mapper', parameters=[config], output='screen'),
         # Gunakan jalur controller yang sama dengan drone nyata agar respons
@@ -30,5 +36,7 @@ def generate_launch_description():
         Node(package='beehive_drone', executable='mission_safety_monitor', parameters=[config], remappings=sim_pose_remap, output='screen'),
         Node(package='beehive_drone', executable='mission_analyzer', parameters=[config],
              remappings=sim_pose_remap, output='screen'),
-        Node(package='beehive_drone', executable='mission_state_machine', parameters=[config], remappings=sim_pose_remap, output='screen'),
+        # Hindari command GUIDED pertama terbit sebelum flight_manager selesai
+        # membuat subscription dan service client MAVROS.
+        TimerAction(period=2.0, actions=[mission_state_machine]),
     ])

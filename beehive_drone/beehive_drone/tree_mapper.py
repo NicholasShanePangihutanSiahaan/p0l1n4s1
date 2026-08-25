@@ -232,6 +232,8 @@ class TreeMapper(Node):
                 "confidence": self.new_tree_confidence,
                 "count":1,
                 "inspected":False,
+                "validated":False,
+                "orbit_count":0,
                 "last_seen": time.time()
             }
             self.next_tree_id += 1
@@ -275,9 +277,13 @@ class TreeMapper(Node):
         tree["z"] = msg.z
         tree["confidence"] = msg.confidence
         tree["inspected"] = msg.inspected
+        tree["validated"] = msg.validated
+        tree["orbit_count"] = int(msg.orbit_count)
         tree["last_seen"] = time.time()
 
-        self.get_logger().info(f"Tree {msg.id} inspected={msg.inspected}")
+        self.get_logger().info(
+            f"Tree {msg.id} validated={msg.validated}, "
+            f"inspected={msg.inspected}, orbit_count={msg.orbit_count}")
 
         self.publish_tree()
         self.publish_marker()
@@ -321,6 +327,8 @@ class TreeMapper(Node):
             t.z = tree["z"]
             t.confidence = tree["confidence"]
             t.inspected = tree["inspected"]
+            t.validated = tree["validated"]
+            t.orbit_count = tree["orbit_count"]
 
             msg.trees.append(t)
 
@@ -402,9 +410,13 @@ def main(args=None):
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
+    except RuntimeError:
+        if rclpy.ok():
+            raise
 
     node.destroy_node()
-    rclpy.shutdown()
+    if rclpy.ok():
+        rclpy.shutdown()
 
 if __name__ == "__main__":
     main()

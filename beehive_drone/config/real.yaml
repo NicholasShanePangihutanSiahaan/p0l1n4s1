@@ -28,8 +28,8 @@ flight_manager:
     hover_tolerance: 0.2
     rangefinder_topic: /mavros/rangefinder/rangefinder
     rangefinder_timeout: 1.0
-    rangefinder_min_valid: 0.001
-    rangefinder_max_valid: 20.0
+    rangefinder_min_valid: 0.08
+    rangefinder_max_valid: 8.0
     # Offset vertikal base_link terhadap pusat lidar, jika diperlukan.
     rangefinder_altitude_offset: 0.0
 
@@ -49,7 +49,8 @@ tree_mapper:
 mission_state_machine:
   ros__parameters:
     flight_altitude: 1.5
-    approach_distance: 2.0
+    # Jarak horizontal titik approach terhadap pusat batang.
+    approach_distance: 1.5
     tree_distance_tolerance: 0.5
     approach_goal_tolerance: 0.15
     verification_retry_limit: 3
@@ -60,6 +61,12 @@ mission_state_machine:
     state_timeout: 300.0
     pose_timeout: 5.0
     post_takeoff_hover_time: 2.0
+    # Bridge dijalankan terpisah. Misi menunggu aliran vision stabil agar
+    # auto_start tidak beradu dengan inisialisasi ExternalNav/EKF.
+    require_vision_before_start: true
+    vision_pose_topic: /mavros/vision_pose/pose
+    vision_pose_timeout: 1.0
+    vision_warmup_time: 5.0
     abort_mode: BRAKE
 
 dynamic_orbit_controller:
@@ -79,6 +86,21 @@ position_setpoint_controller:
     max_vertical_step: 0.05
     target_timeout: 0.75
     output_frame: map
+    # EKF tetap memakai local-Z yang halus; rangefinder hanya menggeser target
+    # vertikal agar clearance terhadap permukaan tetap 1.5 m.
+    terrain_following_enabled: true
+    rangefinder_topic: /mavros/rangefinder/rangefinder
+    desired_agl: 1.5
+    rangefinder_timeout: 0.50
+    rangefinder_min_valid: 0.08
+    rangefinder_max_valid: 8.0
+    rangefinder_altitude_offset: 0.0
+    range_filter_alpha: 0.35
+    range_median_window: 5
+    minimum_tilt_cosine: 0.70
+    max_terrain_correction: 1.0
+    max_terrain_target_rate: 0.50
+    hold_position_on_range_loss: true
 
 # Dipakai jika real launch dialihkan ke kontrol kecepatan untuk tuning.
 velocity_controller:
@@ -99,7 +121,7 @@ mission_safety_monitor:
     range_timeout: 5.0
     range_arm_grace: 5.0
     min_range: 0.08
-    max_range: 20.0
+    max_range: 8.0
 
 mission_analyzer:
   ros__parameters:
@@ -108,3 +130,7 @@ mission_analyzer:
     sample_period: 0.20
     console_period: 2.0
     autosave_period: 10.0
+    rangefinder_topic: /mavros/rangefinder/rangefinder
+    expected_takeoff_altitude: 1.5
+    expected_approach_distance: 1.5
+    expected_orbit_radius: 1.5

@@ -35,6 +35,7 @@ setup(
             'position_setpoint_controller = beehive_drone.position_setpoint_controller:main',
             'mission_safety_monitor = beehive_drone.mission_safety_monitor:main',
             'sim_external_odometry = beehive_drone.sim_external_odometry:main',
+            'sim_rangefinder_bridge = beehive_drone.sim_rangefinder_bridge:main',
             'vision_to_mavros = beehive_drone.vision_to_mavros:main',
         ],
     },

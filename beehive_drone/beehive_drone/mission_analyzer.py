@@ -33,9 +33,13 @@ class MissionAnalyzer(Node):
         self.declare_parameter('autosave_period', 10.0)
         self.declare_parameter('map_frame', 'odom')
         self.declare_parameter('expected_takeoff_altitude', 1.5)
+        self.declare_parameter('expected_approach_distance', 1.5)
+        self.declare_parameter('expected_orbit_radius', 1.5)
         self.declare_parameter('topic_stale_threshold', 1.5)
         self.declare_parameter('altitude_jump_threshold', 0.50)
         self.declare_parameter('altitude_disagreement_threshold', 0.75)
+        self.declare_parameter(
+            'rangefinder_topic', '/mavros/rangefinder/rangefinder')
 
         root = Path(os.path.expanduser(str(
             self.get_parameter('output_directory').value))).resolve()
@@ -47,10 +51,16 @@ class MissionAnalyzer(Node):
         self.console_period = max(0.5, float(self.get_parameter('console_period').value))
         self.autosave_period = max(2.0, float(self.get_parameter('autosave_period').value))
         self.expected_takeoff_altitude = float(self.get_parameter('expected_takeoff_altitude').value)
+        self.expected_approach_distance = float(
+            self.get_parameter('expected_approach_distance').value)
+        self.expected_orbit_radius = float(
+            self.get_parameter('expected_orbit_radius').value)
         self.topic_stale_threshold = max(0.1, float(self.get_parameter('topic_stale_threshold').value))
         self.altitude_jump_threshold = max(0.05, float(self.get_parameter('altitude_jump_threshold').value))
         self.altitude_disagreement_threshold = max(0.05, float(
             self.get_parameter('altitude_disagreement_threshold').value))
+        self.rangefinder_topic = str(
+            self.get_parameter('rangefinder_topic').value)
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -86,11 +96,17 @@ class MissionAnalyzer(Node):
         self.diagnostics = {
             'connected': False, 'armed': False, 'flight_mode': '',
             'landed_state': -1, 'rangefinder_m': math.nan,
-            'relative_alt_m': math.nan, 'local_vz_mps': math.nan,
+            'relative_alt_m': math.nan,
+            'local_vx_mps': math.nan, 'local_vy_mps': math.nan,
+            'local_vz_mps': math.nan,
             'static_pressure_pa': math.nan,
             'zed_z_m': math.nan, 'vision_z_m': math.nan,
             'telemetry_altitude_m': math.nan, 'target_altitude_m': math.nan,
             'setpoint_z_m': math.nan, 'is_hovering': False,
+            'terrain_measured_agl_m': math.nan,
+            'terrain_agl_error_m': math.nan,
+            'terrain_target_z_m': math.nan,
+            'terrain_status': '',
         }
         self.diagnostic_samples = []
         self.fc_messages = []
@@ -109,7 +125,7 @@ class MissionAnalyzer(Node):
         self.create_subscription(State, '/mavros/state', self.mavros_state_callback, 10)
         self.create_subscription(ExtendedState, '/mavros/extended_state',
                                  self.extended_state_callback, 10)
-        self.create_subscription(Range, '/mavros/rangefinder/rangefinder',
+        self.create_subscription(Range, self.rangefinder_topic,
                                  self.rangefinder_callback, sensor_qos)
         self.create_subscription(FluidPressure, '/mavros/imu/static_pressure',
                                  self.pressure_callback, sensor_qos)
@@ -134,6 +150,14 @@ class MissionAnalyzer(Node):
                                  self.hover_callback, 10)
         self.create_subscription(PoseStamped, '/mavros/setpoint_position/local',
                                  self.setpoint_callback, 10)
+        self.create_subscription(Float32, '/control/terrain/measured_agl',
+                                 self.terrain_agl_callback, 10)
+        self.create_subscription(Float32, '/control/terrain/agl_error',
+                                 self.terrain_error_callback, 10)
+        self.create_subscription(Float32, '/control/terrain/target_z',
+                                 self.terrain_target_callback, 10)
+        self.create_subscription(String, '/control/terrain/status',
+                                 self.terrain_status_callback, 10)
         self.create_subscription(StatusText, '/mavros/statustext/recv',
                                  self.statustext_callback, qos_recv)
         self.create_timer(self.sample_period, self.sample)
@@ -227,6 +251,8 @@ class MissionAnalyzer(Node):
 
     def velocity_callback(self, msg):
         self.mark_received('local_velocity')
+        self.diagnostics['local_vx_mps'] = float(msg.twist.linear.x)
+        self.diagnostics['local_vy_mps'] = float(msg.twist.linear.y)
         self.diagnostics['local_vz_mps'] = float(msg.twist.linear.z)
 
     def vision_pose_callback(self, msg):
@@ -253,6 +279,22 @@ class MissionAnalyzer(Node):
         self.mark_received('setpoint')
         self.diagnostics['setpoint_z_m'] = float(msg.pose.position.z)
 
+    def terrain_agl_callback(self, msg):
+        self.mark_received('terrain_control')
+        self.diagnostics['terrain_measured_agl_m'] = float(msg.data)
+
+    def terrain_error_callback(self, msg):
+        self.mark_received('terrain_control')
+        self.diagnostics['terrain_agl_error_m'] = float(msg.data)
+
+    def terrain_target_callback(self, msg):
+        self.mark_received('terrain_control')
+        self.diagnostics['terrain_target_z_m'] = float(msg.data)
+
+    def terrain_status_callback(self, msg):
+        self.mark_received('terrain_control')
+        self.diagnostics['terrain_status'] = str(msg.data)
+
     def statustext_callback(self, msg):
         self.fc_messages.append({
             'time_s': self.elapsed(), 'severity': int(msg.severity),
@@ -265,7 +307,7 @@ class MissionAnalyzer(Node):
         now = self.elapsed()
         p = self.latest_pose.position
         yaw = self.yaw_from_quaternion(self.latest_pose.orientation)
-        speed = 0.0
+        speed = math.nan
         if self.previous_sample is not None:
             dt = now - self.previous_sample['time_s']
             dx = p.x - self.previous_sample['x']
@@ -275,13 +317,39 @@ class MissionAnalyzer(Node):
             d3 = math.sqrt(dx * dx + dy * dy + dz * dz)
             self.total_distance_xy += dxy
             self.total_distance_3d += d3
-            if dt > 1e-3:
+            # Timer autosave/plot dapat memblokir executor sesaat lalu memicu
+            # dua callback sample yang berdekatan. Jangan membagi perpindahan
+            # pose selama jeda tersebut dengan dt callback yang sangat kecil.
+            if dt >= 0.5 * self.sample_period:
                 speed = d3 / dt
-                self.max_speed = max(self.max_speed, speed)
+        velocity_age = self.topic_age('local_velocity', now)
+        velocity_components = (
+            self.diagnostics['local_vx_mps'],
+            self.diagnostics['local_vy_mps'],
+            self.diagnostics['local_vz_mps'],
+        )
+        if (math.isfinite(velocity_age)
+                and velocity_age <= self.topic_stale_threshold
+                and all(math.isfinite(value) for value in velocity_components)):
+            speed = math.sqrt(sum(value * value for value in velocity_components))
+        if not math.isfinite(speed):
+            speed = 0.0
+        self.max_speed = max(self.max_speed, speed)
+        nearest_tree_id = -1
+        nearest_tree_distance = math.nan
+        if self.trees:
+            nearest = min(
+                self.trees.values(),
+                key=lambda tree: math.hypot(p.x - tree['x'], p.y - tree['y']))
+            nearest_tree_id = nearest['id']
+            nearest_tree_distance = math.hypot(
+                p.x - nearest['x'], p.y - nearest['y'])
         row = {
             'time_s': now, 'x': float(p.x), 'y': float(p.y), 'z': float(p.z),
             'yaw_deg': math.degrees(yaw), 'speed_mps': speed,
             'state': self.current_state,
+            'nearest_tree_id': nearest_tree_id,
+            'nearest_tree_distance_xy_m': nearest_tree_distance,
         }
         self.samples.append(row)
         diag = {
@@ -306,7 +374,8 @@ class MissionAnalyzer(Node):
         tracked_topics = (
             'local_pose', 'mavros_state', 'extended_state', 'rangefinder',
             'static_pressure', 'relative_alt', 'local_velocity', 'vision_pose',
-            'zed_pose', 'telemetry_altitude', 'target_altitude', 'hover', 'setpoint')
+            'zed_pose', 'telemetry_altitude', 'target_altitude', 'hover',
+            'setpoint', 'terrain_control')
         for name in tracked_topics:
             age = self.topic_age(name, now)
             diag[f'{name}_received'] = name in self.topic_last_seen
@@ -350,6 +419,161 @@ class MissionAnalyzer(Node):
         self.max_altitude = max(self.max_altitude, float(p.z))
         self.min_altitude = min(self.min_altitude, float(p.z))
 
+    @staticmethod
+    def percentile(values, percentile):
+        if not values:
+            return None
+        ordered = sorted(values)
+        position = (len(ordered) - 1) * percentile / 100.0
+        lower = int(math.floor(position))
+        upper = int(math.ceil(position))
+        if lower == upper:
+            return ordered[lower]
+        fraction = position - lower
+        return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+    def terrain_statistics(self):
+        active_states = {
+            'EXPLORE_ROW', 'APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT',
+            'WAIT_ORBIT', 'POST_ORBIT_HOVER', 'ALIGN_HOME',
+            'RETURN_TO_HOME', 'HOME_HOVER',
+        }
+        active = [
+            item for item in self.diagnostic_samples
+            if item.get('state') in active_states
+        ]
+        tracking = [
+            item for item in active
+            if item.get('terrain_status') == 'TRACKING'
+            and math.isfinite(item.get('terrain_measured_agl_m', math.nan))
+            and math.isfinite(item.get('terrain_agl_error_m', math.nan))
+        ]
+        agl_values = [item['terrain_measured_agl_m'] for item in tracking]
+        errors = [item['terrain_agl_error_m'] for item in tracking]
+        absolute_errors = [abs(value) for value in errors]
+
+        def mean(values):
+            return sum(values) / len(values) if values else None
+
+        agl_mean = mean(agl_values)
+        agl_std = None
+        if agl_values:
+            agl_std = math.sqrt(sum(
+                (value - agl_mean) ** 2 for value in agl_values) / len(agl_values))
+        rmse = None
+        if errors:
+            rmse = math.sqrt(sum(value * value for value in errors) / len(errors))
+        return {
+            'desired_agl_m': self.expected_takeoff_altitude,
+            'active_sample_count': len(active),
+            'tracking_sample_count': len(tracking),
+            'tracking_availability_percent': (
+                100.0 * len(tracking) / len(active) if active else 0.0),
+            'mean_agl_m': agl_mean,
+            'standard_deviation_agl_m': agl_std,
+            'minimum_agl_m': min(agl_values) if agl_values else None,
+            'maximum_agl_m': max(agl_values) if agl_values else None,
+            'mean_absolute_error_m': mean(absolute_errors),
+            'rmse_m': rmse,
+            'p95_absolute_error_m': self.percentile(absolute_errors, 95.0),
+            'maximum_absolute_error_m': (
+                max(absolute_errors) if absolute_errors else None),
+        }
+
+    def state_duration_statistics(self):
+        durations = {}
+        if not self.state_events:
+            return durations
+        end_time = self.elapsed()
+        for index, event in enumerate(self.state_events):
+            next_time = (
+                self.state_events[index + 1]['time_s']
+                if index + 1 < len(self.state_events) else end_time)
+            durations[event['state']] = durations.get(event['state'], 0.0) + max(
+                0.0, next_time - event['time_s'])
+        return durations
+
+    @staticmethod
+    def finite_tree_distances(samples):
+        return [
+            row['nearest_tree_distance_xy_m'] for row in samples
+            if math.isfinite(row.get('nearest_tree_distance_xy_m', math.nan))
+        ]
+
+    def flight_geometry_statistics(self):
+        approach_samples = [
+            row for row in self.samples
+            if row['state'] in ('APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT')
+        ]
+        verification_samples = [
+            row for row in self.samples if row['state'] == 'VERIFY_TREE'
+        ]
+        orbit_samples = [
+            row for row in self.samples if row['state'] == 'WAIT_ORBIT'
+        ]
+        approach_distances = self.finite_tree_distances(approach_samples)
+        verification_distances = self.finite_tree_distances(verification_samples)
+        orbit_radii = self.finite_tree_distances(orbit_samples)
+        orbit_errors = [
+            value - self.expected_orbit_radius for value in orbit_radii]
+        orbit_abs_errors = [abs(value) for value in orbit_errors]
+
+        def mean(values):
+            return sum(values) / len(values) if values else None
+
+        orbit_mean = mean(orbit_radii)
+        orbit_std = None
+        if orbit_radii:
+            orbit_std = math.sqrt(sum(
+                (value - orbit_mean) ** 2 for value in orbit_radii
+            ) / len(orbit_radii))
+        final_pose = self.samples[-1] if self.samples else None
+        home_xy_error = None
+        home_z_error = None
+        if final_pose is not None and self.home is not None:
+            home_xy_error = math.hypot(
+                final_pose['x'] - self.home[0], final_pose['y'] - self.home[1])
+            home_z_error = final_pose['z'] - self.home[2]
+        return {
+            'expected_approach_distance_m': self.expected_approach_distance,
+            'approach_sample_count': len(approach_distances),
+            'closest_approach_distance_m': (
+                min(approach_distances) if approach_distances else None),
+            'verification_distance_m': (
+                verification_distances[-1] if verification_distances else None),
+            'verification_distance_error_m': (
+                verification_distances[-1] - self.expected_approach_distance
+                if verification_distances else None),
+            'expected_orbit_radius_m': self.expected_orbit_radius,
+            'orbit_sample_count': len(orbit_radii),
+            'mean_orbit_radius_m': orbit_mean,
+            'standard_deviation_orbit_radius_m': orbit_std,
+            'minimum_orbit_radius_m': min(orbit_radii) if orbit_radii else None,
+            'maximum_orbit_radius_m': max(orbit_radii) if orbit_radii else None,
+            'mean_absolute_orbit_radius_error_m': mean(orbit_abs_errors),
+            'p95_absolute_orbit_radius_error_m': self.percentile(
+                orbit_abs_errors, 95.0),
+            'maximum_absolute_orbit_radius_error_m': (
+                max(orbit_abs_errors) if orbit_abs_errors else None),
+            'final_home_xy_error_m': home_xy_error,
+            'final_home_z_error_m': home_z_error,
+        }
+
+    def sensor_availability_statistics(self):
+        total = len(self.diagnostic_samples)
+        topic_names = (
+            'local_pose', 'mavros_state', 'rangefinder', 'local_velocity',
+            'vision_pose', 'zed_pose', 'terrain_control')
+        result = {'sample_count': total}
+        for topic in topic_names:
+            healthy = sum(
+                bool(row.get(f'{topic}_received'))
+                and not bool(row.get(f'{topic}_stale'))
+                for row in self.diagnostic_samples)
+            result[f'{topic}_healthy_percent'] = (
+                100.0 * healthy / total if total else 0.0)
+        return result
+
     def statistics(self):
         duration = self.elapsed()
         inspected = sum(t['inspected'] for t in self.trees.values())
@@ -374,6 +598,15 @@ class MissionAnalyzer(Node):
             'trees_inspected': inspected,
             'coverage_percent': 100.0 * inspected / count if count else 0.0,
             'sample_count': len(self.samples),
+            'mission_configuration': {
+                'takeoff_and_agl_target_m': self.expected_takeoff_altitude,
+                'approach_distance_m': self.expected_approach_distance,
+                'orbit_radius_m': self.expected_orbit_radius,
+            },
+            'terrain_following': self.terrain_statistics(),
+            'flight_geometry': self.flight_geometry_statistics(),
+            'state_durations_s': self.state_duration_statistics(),
+            'sensor_availability': self.sensor_availability_statistics(),
         }
 
     def print_status(self):
@@ -404,7 +637,8 @@ class MissionAnalyzer(Node):
 
     def save_data_files(self):
         self.write_csv(self.output_dir / 'drone_trajectory.csv', self.samples,
-                       ['time_s', 'x', 'y', 'z', 'yaw_deg', 'speed_mps', 'state'])
+                       ['time_s', 'x', 'y', 'z', 'yaw_deg', 'speed_mps', 'state',
+                        'nearest_tree_id', 'nearest_tree_distance_xy_m'])
         self.write_csv(self.output_dir / 'tree_map.csv',
                        sorted(self.trees.values(), key=lambda item: item['id']),
                        ['id', 'x', 'y', 'z', 'confidence', 'inspected',
@@ -415,8 +649,11 @@ class MissionAnalyzer(Node):
             'time_s', 'state', 'connected', 'armed', 'flight_mode',
             'landed_state', 'rangefinder_m', 'static_pressure_pa',
             'static_pressure_hpa', 'relative_alt_m', 'local_z_m',
-            'local_vz_mps', 'zed_z_m', 'vision_z_m',
+            'local_vx_mps', 'local_vy_mps', 'local_vz_mps',
+            'zed_z_m', 'vision_z_m',
             'telemetry_altitude_m', 'target_altitude_m', 'setpoint_z_m',
+            'terrain_measured_agl_m', 'terrain_agl_error_m',
+            'terrain_target_z_m', 'terrain_status',
             'expected_takeoff_altitude_m', 'is_hovering',
             'relative_alt_from_home_m', 'local_z_from_home_m',
             'zed_z_from_home_m', 'vision_z_from_home_m',
@@ -427,7 +664,7 @@ class MissionAnalyzer(Node):
                 'local_pose', 'mavros_state', 'extended_state', 'rangefinder',
                 'static_pressure', 'relative_alt', 'local_velocity', 'vision_pose',
                 'zed_pose', 'telemetry_altitude', 'target_altitude', 'hover',
-                'setpoint'):
+                'setpoint', 'terrain_control'):
             diagnostic_fields.extend(
                 [f'{name}_received', f'{name}_age_s', f'{name}_stale'])
         self.write_csv(self.output_dir / 'altitude_diagnostics.csv',
@@ -523,6 +760,7 @@ class MissionAnalyzer(Node):
                 ('vision_z_m', 'Vision pose Z', 'tab:brown'),
                 ('target_altitude_m', 'Target altitude', 'tab:red'),
                 ('setpoint_z_m', 'Setpoint Z', 'tab:pink'),
+                ('terrain_target_z_m', 'Terrain target Z', 'tab:olive'),
                 ('expected_takeoff_altitude_m', 'Expected takeoff', 'black'),
             )
             for key, label, color in series:
@@ -535,6 +773,8 @@ class MissionAnalyzer(Node):
                         label='Target - rel_alt', color='tab:red')
             err_ax.plot(dts, [item['local_z_error_m'] for item in ds],
                         label='Setpoint Z - local Z', color='tab:cyan')
+            err_ax.plot(dts, [item['terrain_agl_error_m'] for item in ds],
+                        label='Target AGL - rangefinder', color='tab:purple')
             err_ax.axhline(0.0, color='black', linewidth=0.7)
             err_ax.set_ylabel('Error (m)')
             err_ax.grid(True, alpha=0.3)
