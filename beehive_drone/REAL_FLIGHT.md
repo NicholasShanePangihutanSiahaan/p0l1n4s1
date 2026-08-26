@@ -123,6 +123,18 @@ MAVROS. Jangan menjalankan `pcl_proc_node` terpisah pada saat yang sama.
 Pastikan `/global_cylinders` dan `/map/trees` muncul sebelum mengharapkan drone
 mengunci pohon.
 
+Untuk topic `cloud_registered`, frame ZED sudah memakai sumbu ROS (X depan,
+Y kiri, Z atas), sehingga transformasi optical harus nonaktif:
+
+```bash
+ros2 param get /pcl_proc_node use_transform_pcl
+ros2 topic echo --once /zed/zed_node/point_cloud/cloud_registered --field header.frame_id
+```
+
+Hasil yang diharapkan adalah `false` dan `zed_left_camera_frame`. Node PCL juga
+akan menolak konversi optical jika parameter keliru diaktifkan pada frame
+non-optical.
+
 Setelah seluruh data sehat dan area aman, mulai misi:
 
 ```bash

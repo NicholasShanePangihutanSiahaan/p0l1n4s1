@@ -2,6 +2,7 @@
 #include <vector>
 #include <memory>
 #include <cstdint>
+#include <string>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -43,7 +44,10 @@ namespace point_cloud_test
     PclProcNode()
         : Node("pcl_proc_node")
     {
-      this->declare_parameter("use_transform_pcl", true);
+      // ZED ROS publishes cloud_registered in a ROS camera frame (X forward,
+      // Y left, Z up).  Optical conversion is therefore opt-in and is only
+      // honored for an input frame explicitly named as an optical frame.
+      this->declare_parameter("use_transform_pcl", false);
       this->declare_parameter("min_sensor_range", 0.3);
       this->declare_parameter("max_sensor_range", 15.0);
       this->declare_parameter("voxel_leaf_size", 0.20);
@@ -239,7 +243,30 @@ namespace point_cloud_test
              Eigen::AngleAxisf(mount_pitch, Eigen::Vector3f::UnitY()) *
              Eigen::AngleAxisf(mount_roll, Eigen::Vector3f::UnitX())).toRotationMatrix();
 
-        bool is_use_transform_pcl = this->get_parameter("use_transform_pcl").as_bool();
+        const bool transform_requested =
+            this->get_parameter("use_transform_pcl").as_bool();
+        const std::string &input_frame = pair.cloud->header.frame_id;
+        const bool input_is_optical =
+            input_frame.find("optical") != std::string::npos;
+        const bool is_use_transform_pcl =
+            transform_requested && input_is_optical;
+
+        if (transform_requested && !input_is_optical)
+        {
+          RCLCPP_ERROR_ONCE(
+              get_logger(),
+              "Refusing optical-to-robot conversion for non-optical frame '%s'; "
+              "using the cloud's ROS axes unchanged",
+              input_frame.c_str());
+        }
+        else if (!transform_requested && input_is_optical)
+        {
+          RCLCPP_WARN_ONCE(
+              get_logger(),
+              "Input point cloud frame '%s' is optical but use_transform_pcl "
+              "is false; verify the configured point-cloud topic",
+              input_frame.c_str());
+        }
 
         for (const auto &pt : filtered->points)
         {
@@ -252,12 +279,13 @@ namespace point_cloud_test
             continue; 
           }
           
-          Eigen::Vector3f robot_pt;
-          if (is_use_transform_pcl) {
-            robot_pt = mount_rotation * R_optical_to_robot_ * optical_pt + camera_offset;
-          } else {
-            robot_pt = optical_pt;
+          Eigen::Vector3f robot_axes_pt = optical_pt;
+          if (is_use_transform_pcl)
+          {
+            robot_axes_pt = R_optical_to_robot_ * optical_pt;
           }
+          const Eigen::Vector3f robot_pt =
+              mount_rotation * robot_axes_pt + camera_offset;
           Eigen::Vector3f global_pt = R * robot_pt + t;
           pcl::PointXYZ p;
           p.x = global_pt.x();

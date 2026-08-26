@@ -11,6 +11,8 @@ vision_to_mavros:
 
 pcl_proc_node:
   ros__parameters:
+    # ZED cloud_registered sudah memakai sumbu ROS (X depan, Y kiri, Z atas).
+    use_transform_pcl: false
     output_frame: odom
     process_period_ms: 500
     max_buffered_pairs: 2
