@@ -17,6 +17,10 @@ find_package(sensor_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(pcl_cstm_msg REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(zed_msgs REQUIRED)
+find_package(Eigen3 REQUIRED)
 
 find_package(PCL 1.12 REQUIRED)
 
@@ -46,9 +50,35 @@ ament_target_dependencies(pcl_proc_node
   pcl_cstm_msg
 )
 
+# Bounding-box perception path from Wafi-Afdi/PCL_Segmentation.  Keep the
+# geometric PCL node above for Gazebo and legacy bag replay.
+add_executable(bb_pcl_proc_node src/bb_pcl_proc_node.cpp)
+
+target_include_directories(bb_pcl_proc_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(bb_pcl_proc_node Eigen3::Eigen)
+ament_target_dependencies(bb_pcl_proc_node
+  rclcpp
+  std_msgs
+  geometry_msgs
+  nav_msgs
+  sensor_msgs
+  message_filters
+  pcl_cstm_msg
+  tf2
+  tf2_ros
+  zed_msgs
+)
+
 install(TARGETS
   pcl_proc_node
+  bb_pcl_proc_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY launch config
+  DESTINATION share/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)

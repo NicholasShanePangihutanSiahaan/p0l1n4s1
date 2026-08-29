@@ -21,6 +21,11 @@ def quaternion_to_yaw(q):
     cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     return math.atan2(siny_cosp, cosy_cosp)
 
+
+def landing_command_due(current_mode, last_command_age, retry_interval):
+    """Return whether the LAND request may be sent without flooding MAVROS."""
+    return current_mode != 'LAND' and last_command_age >= retry_interval
+
 class MissionStateMachine(Node):
     def __init__(self):
         super().__init__("mission_state_machine")
@@ -60,6 +65,7 @@ class MissionStateMachine(Node):
             'vision_pose_topic', '/mavros/vision_pose/pose')
         self.declare_parameter('vision_pose_timeout', 1.0)
         self.declare_parameter('vision_warmup_time', 5.0)
+        self.declare_parameter('landing_retry_interval', 1.0)
         self.flight_altitude = float(self.get_parameter('flight_altitude').value)
         self.approach_safe_dist = float(
             self.get_parameter('approach_distance').value)
@@ -83,6 +89,8 @@ class MissionStateMachine(Node):
             0.1, float(self.get_parameter('vision_pose_timeout').value))
         self.vision_warmup_time = max(
             0.0, float(self.get_parameter('vision_warmup_time').value))
+        self.landing_retry_interval = max(
+            0.5, float(self.get_parameter('landing_retry_interval').value))
 
         # ==========================================
         # Variabel State & Navigasi
@@ -104,6 +112,7 @@ class MissionStateMachine(Node):
         self.hold_yaw = 0.0
         self.navigation_altitude = None
         self.abort_command_sent = False
+        self.last_landing_command_time = None
         self.trees = []
         self.target_tree = None
         self.first_vision_time = None
@@ -231,6 +240,8 @@ class MissionStateMachine(Node):
         self.state_since = self.get_clock().now()
         if state == 'ABORT':
             self.abort_command_sent = False
+        if state == 'LANDING':
+            self.last_landing_command_time = None
 
     def publish_setpoint_enabled(self, enabled):
         msg = Bool(); msg.data = enabled
@@ -669,11 +680,22 @@ class MissionStateMachine(Node):
                 self.publish_goal(cx, cy, target_yaw)
 
         elif self.state == "LANDING":
-            land_msg = Bool(); land_msg.data = True
-            self.cmd_land_pub.publish(land_msg)
-            # Ulangi command sampai kendaraan benar-benar turun atau disarm,
-            # agar satu pesan yang hilang tidak menggagalkan landing.
-            if not self.is_armed or self.current_pose.pose.position.z < 0.20:
+            now = self.get_clock().now()
+            last_command_age = (
+                float('inf') if self.last_landing_command_time is None else
+                (now - self.last_landing_command_time).nanoseconds * 1e-9)
+            # Satu command cukup setelah FC melaporkan LAND. Sebelum itu, retry
+            # dibatasi agar service MAVROS tidak dibanjiri pada loop FSM 10 Hz.
+            if landing_command_due(
+                    self.current_mode,
+                    last_command_age,
+                    self.landing_retry_interval):
+                land_msg = Bool(); land_msg.data = True
+                self.cmd_land_pub.publish(land_msg)
+                self.last_landing_command_time = now
+            # DONE hanya setelah FC benar-benar disarm; ketinggian rendah saja
+            # belum menjamin motor aman pada kendaraan nyata.
+            if not self.is_armed:
                 self.transition("DONE")
                 self.get_logger().info("Landing selesai. Misi DONE.")
             

@@ -1,0 +1,9 @@
+names:
+  0: pohon
+  1: fruits
+  2: male-flowers
+  3: post-receptive-female
+  4: pre-receptive-female
+  5: receptive-female
+
+# End of names. The blank line is required by older ZED wrapper label parsers.

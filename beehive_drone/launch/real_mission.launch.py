@@ -1,9 +1,8 @@
 """Real mission nodes.
 
-MAVROS, ZED wrapper, and ``vision_to_mavros`` must already be healthy. The PCL
-processor is started here. The vision bridge is intentionally kept out of this
-launch file so the EKF has time to receive external-navigation data before an
-autonomous mission starts.
+MAVROS, ZED wrapper, ``vision_to_mavros``, and ``bb_proc_node.launch.py`` must
+already be healthy. Perception is intentionally kept out of this launch so the
+mission never starts a second publisher on ``/global_cylinders``.
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -14,44 +13,42 @@ import os
 
 
 def generate_launch_description():
-    config = os.path.join(get_package_share_directory('beehive_drone'), 'config', 'real.yaml')
-    cloud = LaunchConfiguration('pointcloud_topic')
-    odom = LaunchConfiguration('odometry_topic')
+    config = os.path.join(
+        get_package_share_directory('beehive_drone'), 'config', 'real.yaml')
     auto_start = LaunchConfiguration('auto_start')
+    analyzer_output_directory = LaunchConfiguration(
+        'analyzer_output_directory')
     return LaunchDescription([
-        DeclareLaunchArgument('pointcloud_topic',
-                              default_value='/zed/zed_node/point_cloud/cloud_registered'),
         DeclareLaunchArgument(
-            'odometry_topic', default_value='/mavros/local_position/odom'),
-        DeclareLaunchArgument(
-            'auto_start', default_value='true',
+            'auto_start', default_value='false',
             description=(
-                'true: otomatis GUIDED/arm/takeoff setelah local pose tersedia. '
-                'Aktifkan hanya setelah MAVROS, ZED, dan vision bridge sehat.')),
-        # PCL merupakan bagian persepsi misi. Vision-to-MAVROS tetap proses
-        # terpisah karena harus hidup lebih dulu untuk warm-up EKF.
-        Node(
-            package='point-cloud-test', executable='pcl_proc_node',
-            name='pcl_proc_node', output='screen', parameters=[config],
-            remappings=[
-                ('/input_cloud', cloud),
-                ('/odom', odom),
-                ('/output_cloud', '/perception/pcl/non_ground'),
-                ('/clusters', '/perception/pcl/clusters'),
-                ('/cylinders', '/perception/pcl/cylinders'),
-                ('/global/cylinders', '/global_cylinders'),
-            ],
-        ),
-        Node(package='beehive_drone', executable='tree_mapper', parameters=[config], output='screen'),
-        Node(package='beehive_drone', executable='vortex_avoidance_controller', output='screen'),
-        Node(package='beehive_drone', executable='dynamic_orbit_controller', parameters=[config], output='screen'),
-        Node(package='beehive_drone', executable='position_setpoint_controller', parameters=[config], output='screen'),
+                'true: otomatis GUIDED/arm/takeoff setelah local pose '
+                'tersedia. Aktifkan hanya setelah MAVROS, ZED, dan vision '
+                'bridge sehat.')),
+        DeclareLaunchArgument(
+            'analyzer_output_directory',
+            default_value='~/beehive_mission_reports/real',
+            description='Mission analyzer output directory.'),
+        # /global_cylinders berasal dari bb_pcl_proc_node yang dijalankan
+        # terpisah setelah ZED object detection sehat.
+        Node(package='beehive_drone', executable='tree_mapper',
+             parameters=[config], output='screen'),
+        Node(package='beehive_drone',
+             executable='vortex_avoidance_controller', output='screen'),
+        Node(package='beehive_drone',
+             executable='dynamic_orbit_controller',
+             parameters=[config], output='screen'),
+        Node(package='beehive_drone',
+             executable='position_setpoint_controller',
+             parameters=[config], output='screen'),
         Node(package='beehive_drone', executable='flight_manager',
              parameters=[config], output='screen'),
         Node(package='beehive_drone', executable='mission_safety_monitor',
-             parameters=[config, {'pointcloud_topic': cloud}], output='screen'),
-        Node(package='beehive_drone', executable='mission_analyzer',
              parameters=[config], output='screen'),
+        Node(package='beehive_drone', executable='mission_analyzer',
+             parameters=[config, {
+                 'output_directory': analyzer_output_directory}],
+             output='screen'),
         Node(package='beehive_drone', executable='mission_state_machine',
              parameters=[config, {'auto_start': auto_start}], output='screen'),
     ])

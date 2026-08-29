@@ -7,6 +7,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped
 from mavros_msgs.msg import State
+from pcl_cstm_msg.msg import TrackedCylinderArray
 from sensor_msgs.msg import PointCloud2, Range
 from std_msgs.msg import Bool, String
 
@@ -15,6 +16,7 @@ class MissionSafetyMonitor(Node):
     def __init__(self):
         super().__init__('mission_safety_monitor')
         defaults = {'pointcloud_topic': '/zed2i/depth/points',
+                    'tracked_cylinders_topic': '',
                     'range_topic': '/mavros/rangefinder/rangefinder',
                     'require_rangefinder': False, 'pose_timeout': 1.0,
                     'cloud_timeout': 3.0, 'state_timeout': 1.0,
@@ -28,11 +30,22 @@ class MissionSafetyMonitor(Node):
         self.armed = False
         self.armed_since = None
         cloud_topic = str(self.get_parameter('pointcloud_topic').value)
+        cylinders_topic = str(
+            self.get_parameter('tracked_cylinders_topic').value)
         range_topic = str(self.get_parameter('range_topic').value)
         self.create_subscription(PoseStamped, '/mavros/local_position/pose',
                                  lambda _: self.touch('pose'), qos_profile_sensor_data)
-        self.create_subscription(PointCloud2, cloud_topic,
-                                 lambda _: self.touch('cloud'), qos_profile_sensor_data)
+        if cloud_topic:
+            self.create_subscription(
+                PointCloud2, cloud_topic, lambda _: self.touch('cloud'),
+                qos_profile_sensor_data)
+        if cylinders_topic:
+            # BB perception menerbitkan array ini untuk setiap siklus, termasuk
+            # ketika tidak ada pohon. Karena itu topic ini adalah heartbeat
+            # persepsi yang lebih tepat daripada point cloud pada jalur real.
+            self.create_subscription(
+                TrackedCylinderArray, cylinders_topic,
+                lambda _: self.touch('cloud'), qos_profile_sensor_data)
         self.create_subscription(State, '/mavros/state', self.state_cb, 10)
         self.create_subscription(Range, range_topic, self.range_cb, qos_profile_sensor_data)
         self.ok_pub = self.create_publisher(Bool, '/mission/safety_ok', 10)
@@ -81,8 +94,10 @@ class MissionSafetyMonitor(Node):
                 failures.append('range_stale')
             elif not self.range_valid:
                 failures.append('range_invalid')
-        ok = Bool(); ok.data = not failures
-        reason = String(); reason.data = 'OK' if not failures else ','.join(failures)
+        ok = Bool()
+        ok.data = not failures
+        reason = String()
+        reason.data = 'OK' if not failures else ','.join(failures)
         self.ok_pub.publish(ok)
         self.reason_pub.publish(reason)
 

@@ -1,0 +1,16 @@
+bb_pcl_proc_node:
+  ros__parameters:
+    # false: transform bounding boxes using /zed/zed_node/pose. This matches the
+    # coordinates forwarded unchanged by vision_to_mavros.
+    use_odom_pose: false
+    callback_time: 500
+    object_label_target: pohon
+    # zed_msgs/Object confidence is expressed on a 1..99 scale.
+    min_object_confidence: 25.0
+    accept_searching_tracks: false
+    global_frame_id: map
+    # /zed/.../pose adalah pose base_link. Bounding box berada pada frame
+    # kamera di ObjectsStamped.header.frame_id dan dikoreksi melalui TF ini.
+    base_frame_id: base_link
+    # Keep separate palms from being merged into one long-lived track.
+    max_match_distance: 0.8
