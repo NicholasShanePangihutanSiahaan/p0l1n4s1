@@ -17,8 +17,8 @@ def generate_launch_description():
             default_value='/zed/zed_node/obj_det/objects',
             description='ZED ObjectsStamped topic'),
         DeclareLaunchArgument(
-            'pose_topic', default_value='/zed/zed_node/pose',
-            description='ZED global PoseStamped topic'),
+            'pose_topic', default_value='/zed/aligned_pose',
+            description='ZED pose transformed into the MAVROS-local frame'),
         DeclareLaunchArgument(
             'odom_topic', default_value='/mavros/local_position/odom',
             description='Alternative odometry when use_odom_pose is true'),

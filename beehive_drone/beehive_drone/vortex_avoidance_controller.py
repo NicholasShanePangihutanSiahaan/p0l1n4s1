@@ -100,21 +100,10 @@ class VortexAvoidanceController(Node):
         target_y = active_goal.pose.position.y
         target_z = active_goal.pose.position.z
 
-        # 2. Vektor Tarikan (Attractive Vector) ke Tujuan Asli
-        # Dihitung relatif terhadap posisi drone saat ini
-        dist_to_goal = math.sqrt((target_x - cx)**2 + (target_y - cy)**2)
-        if dist_to_goal > 0.01:
-            # Batasi panjang langkah saat goal jauh, tetapi kecilkan secara
-            # proporsional ketika mendekati goal. Implementasi lama selalu
-            # memberi langkah 0.5 m sampai jarak tinggal 0.1 m lalu mendadak
-            # nol; diskontinuitas itu membuat drone overshoot dan berosilasi.
-            attraction_step = min(dist_to_goal, self.attraction_gain)
-            att_dx = ((target_x - cx) / dist_to_goal) * attraction_step
-            att_dy = ((target_y - cy) / dist_to_goal) * attraction_step
-        else:
-            att_dx = 0.0
-            att_dy = 0.0
-        # 3. Kalkulasi Vektor Penolakan (Repulsive) & Pusaran (Vortex)
+        # Teruskan goal final secara langsung. Slew limiting hanya dilakukan
+        # position_setpoint_controller agar tidak ada dua moving carrot.
+        # Kalkulasi vektor penolakan/pusaran hanya menambah koreksi saat sebuah
+        # obstacle benar-benar masuk safety radius.
         rep_dx = 0.0
         rep_dy = 0.0
         vort_dx = 0.0
@@ -149,8 +138,8 @@ class VortexAvoidanceController(Node):
                 vort_dy += math.sin(vortex_angle) * v_force
 
         # 4. Resultan Vektor Akhir
-        final_dx = att_dx + rep_dx + vort_dx
-        final_dy = att_dy + rep_dy + vort_dy
+        final_dx = rep_dx + vort_dx
+        final_dy = rep_dy + vort_dy
 
         # Membatasi pergeseran target ekstrem agar drone tidak terguling
         shift_mag = math.sqrt(final_dx**2 + final_dy**2)
@@ -163,8 +152,8 @@ class VortexAvoidanceController(Node):
         safe_pose.header.stamp = self.get_clock().now().to_msg()
 
         # 1. Memasukkan Posisi (X,Y,Z) yang sudah aman dari gaya tolak
-        safe_pose.pose.position.x = cx + final_dx
-        safe_pose.pose.position.y = cy + final_dy
+        safe_pose.pose.position.x = target_x + final_dx
+        safe_pose.pose.position.y = target_y + final_dy
         safe_pose.pose.position.z = float(target_z)
 
         # 2. Meneruskan Orientasi/Sudut Kamera ASLI dari FSM atau Orbit
