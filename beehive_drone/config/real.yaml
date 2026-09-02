@@ -52,9 +52,9 @@ tree_mapper:
 
 mission_state_machine:
   ros__parameters:
-    flight_altitude: 2.3
+    flight_altitude: 2.1
     # Jarak horizontal titik approach terhadap pusat batang.
-    approach_distance: 3
+    approach_distance: 3.0
     tree_distance_tolerance: 0.5
     approach_goal_tolerance: 0.15
     verification_retry_limit: 3
@@ -68,7 +68,7 @@ mission_state_machine:
     post_takeoff_hover_time: 2.0
     align_yaw_tolerance_degrees: 7.5
     align_yaw_hold_time: 1.5
-    require_frame_alignment: true
+    require_frame_alignment: false
     # Bridge dijalankan terpisah. Misi menunggu aliran vision stabil agar
     # auto_start tidak beradu dengan inisialisasi ExternalNav/EKF.
     require_vision_before_start: true
@@ -79,7 +79,7 @@ mission_state_machine:
 
 dynamic_orbit_controller:
   ros__parameters:
-    orbit_radius: 3
+    orbit_radius: 3.0
     orbit_altitude: 2.3
     orbit_velocity: 0.25
     orbit_timeout: 180.0
@@ -97,7 +97,7 @@ position_setpoint_controller:
     output_frame: map
     # EKF tetap memakai local-Z yang halus; rangefinder hanya menggeser target
     # vertikal agar clearance terhadap permukaan tetap 1.5 m.
-    terrain_following_enabled: false
+    terrain_following_enabled: true
     rangefinder_topic: /mavros/rangefinder/rangefinder
     desired_agl: 2.3
     rangefinder_timeout: 0.50
@@ -143,6 +143,6 @@ mission_analyzer:
     console_period: 2.0
     autosave_period: 10.0
     rangefinder_topic: /mavros/rangefinder/rangefinder
-    expected_takeoff_altitude: 2.3
-    expected_approach_distance: 3
-    expected_orbit_radius: 3
+    expected_takeoff_altitude: 1.5
+    expected_approach_distance: 1.5
+    expected_orbit_radius: 1.5

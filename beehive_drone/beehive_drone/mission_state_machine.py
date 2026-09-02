@@ -389,6 +389,7 @@ class MissionStateMachine(Node):
         elif self.state == "WAIT_GUIDED":
             if self.current_mode == "GUIDED":
                 arm_msg = Bool(); arm_msg.data = True
+                self.takeoff_yaw = self.current_yaw()
                 self.cmd_arm_pub.publish(arm_msg)
                 self.transition("WAIT_ARM")
                 self.retry_counter = 0
@@ -402,11 +403,15 @@ class MissionStateMachine(Node):
 
         elif self.state == "WAIT_ARM":
             if self.is_armed:
-                takeoff_msg = Float32(); takeoff_msg.data = self.flight_altitude
-                self.cmd_takeoff_pub.publish(takeoff_msg)
-                self.transition("WAIT_TAKEOFF")
-                self.retry_counter = 0
-                self.get_logger().info(f"Motor Bersenjata (Armed). Takeoff ke ketinggian {self.flight_altitude}m...")
+                if not hasattr(self, 'arm_delay_start'):
+                    self.arm_delay_start = self.get_clock().now()
+                elapsed_ns = (self.get_clock().now() - self.arm_delay_start).nanoseconds
+                if elapsed_ns >= 350_000_000:
+                    takeoff_msg = Float32(); takeoff_msg.data = self.flight_altitude
+                    self.cmd_takeoff_pub.publish(takeoff_msg)
+                    self.transition("WAIT_TAKEOFF")
+                    self.retry_counter = 0
+                    self.get_logger().info(f"Motor Bersenjata (Armed). Takeoff ke ketinggian {self.flight_altitude}m...")
             else:
                 self.retry_counter += 1
                 if self.retry_counter > 20:  # Ulangi perintah setiap 2 detik
@@ -419,7 +424,7 @@ class MissionStateMachine(Node):
             if self.is_hovering:
                 self.hold_x = cx
                 self.hold_y = cy
-                self.hold_yaw = self.current_yaw()
+                self.hold_yaw = self.takeoff_yaw
                 self.navigation_altitude = self.current_pose.pose.position.z
                 self.last_tree_x = cx
                 self.last_tree_y = cy
