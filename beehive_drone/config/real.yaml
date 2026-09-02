@@ -66,6 +66,9 @@ mission_state_machine:
     state_timeout: 300.0
     pose_timeout: 5.0
     post_takeoff_hover_time: 2.0
+    align_yaw_tolerance_degrees: 7.5
+    align_yaw_hold_time: 1.5
+    require_frame_alignment: true
     # Bridge dijalankan terpisah. Misi menunggu aliran vision stabil agar
     # auto_start tidak beradu dengan inisialisasi ExternalNav/EKF.
     require_vision_before_start: true
@@ -87,7 +90,8 @@ dynamic_orbit_controller:
 position_setpoint_controller:
   ros__parameters:
     publish_rate: 20.0
-    max_horizontal_step: 0.10
+    # 0.015 m * 20 Hz = commanded-target slew maksimum 0.30 m/s.
+    max_horizontal_step: 0.015
     max_vertical_step: 0.05
     target_timeout: 0.75
     output_frame: map

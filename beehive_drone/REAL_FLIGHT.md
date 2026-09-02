@@ -69,6 +69,9 @@ di controller setpoint selama approach, orbit, dan kembali ke home.
    ini mencegah `auto_start` dimulai dari satu sampel vision pertama, tetapi
    tidak dapat membuktikan bahwa EKF telah menerima fusion; pesan pre-arm FC
    tetap harus bersih.
+   Node alignment membutuhkan referensi yaw/local pose FC sebelum meneruskan
+   pose ZED. Jika FC hanya dikonfigurasi ExternalNav tanpa sumber yaw awal,
+   terjadi bootstrap loop dan `/alignment/ready` tidak akan pernah true.
 7. Untuk konfigurasi EKF, gunakan Barometer sebagai sumber POSZ utama dan
    ExternalNav/Vision untuk posisi horizontal sesuai konfigurasi kendaraan.
    Rangefinder digunakan sebagai pengukuran AGL oleh program; jangan memilih
@@ -95,16 +98,16 @@ ros2 topic echo /control/terrain/target_z
 
 ## Menjalankan dalam urutan yang benar
 
-Build workspace lebih dahulu. `bb_pcl_proc_node` bergantung pada `zed_msgs`
-dari ZED ROS 2 wrapper. Source atau instalasi ZED wrapper harus sudah di-source
-sebelum build:
+Build workspace lebih dahulu. `bb_pcl_proc_node` bergantung pada `zed_msgs`.
+Pada komputer ini source interface ZED berada di workspace PalmBee, sehingga
+sertakan path tersebut saat build (pada Jetson, gunakan path instalasi/source
+ZED yang sesuai):
 
 ```bash
-cd /home/shane/polinasi
+cd /home/shane/ProjekAtaka/gazebo_sim
 source /opt/ros/humble/setup.bash
-source /PATH/WORKSPACE_ZED/install/setup.bash
-colcon build --symlink-install --packages-select \
-  uav_interfaces pcl_cstm_msg point-cloud-test beehive_drone
+colcon build --symlink-install --base-paths src \
+  /home/shane/ProjekAtaka/palmbee_project/PalmBee/palmbee_ws/palmbee_ws/src/zed-ros2-interfaces
 source install/setup.bash
 ```
 
@@ -117,25 +120,41 @@ Terminal 1 — MAVROS/APM (gunakan `fcu_url` yang sesuai perangkat):
 ros2 launch mavros apm.launch fcu_url:=/dev/ttyACM0:921600
 ```
 
-Terminal 2 — ZED2i dengan positional tracking dan model pohon yang sudah
-disertakan dalam package:
+Terminal 2 — ZED2i dengan positional tracking dan custom object detection:
 
 ```bash
-ros2 launch beehive_drone real_zed2i.launch.py
+ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i \
+  ros_params_override_path:=/PATH/ABSOLUT/zed2i_pohon.yaml
 ```
 
-Launch tersebut mengaktifkan tracking dan custom object detection, memakai
-`best_detection_palm_oil.onnx` 512x512 dari package, dan memetakan kelas batang
-model (`Trunk`, class 0) menjadi label `pohon`. Pada start pertama ZED SDK akan
-mengoptimalkan ONNX untuk GPU Jetson; tunggu sampai proses ini selesai.
+File override tersebut wajib mengaktifkan `object_detection.od_enabled`, model
+custom pohon, tracking, serta menghasilkan label persis `pohon`. Launch ZED2i
+default menonaktifkan object detection, sehingga command tanpa override tidak
+cukup untuk BB node.
 
-Terminal 3 — bridge ExternalNav, lalu biarkan mengalir setidaknya 5 detik:
+Terminal 3 — auto-alignment dan bridge ExternalNav. Drone wajib diam, disarmed,
+tracking ZED stabil, dan compass/EKF FC sudah aligned. Biarkan mengumpulkan
+setidaknya 50 sampel:
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/shane/polinasi/install/setup.bash
+source /home/shane/ProjekAtaka/gazebo_sim/install/setup.bash
 ros2 launch beehive_drone vision_to_mavros.launch.py
 ```
+
+Transform `map <- zed_map_raw` dikunci sekali per penerbangan dan tidak dihitung
+ulang ketika terbang. Verifikasi:
+
+```bash
+ros2 topic echo --once /alignment/ready
+ros2 topic echo --once /alignment/yaw_offset_deg
+ros2 run tf2_ros tf2_echo map zed_map_raw
+```
+
+Jangan arm bila `ready: false`. Jika pose mentah ZED meloncat lebih dari 1 m
+atau yaw lebih dari 30 derajat antarsampel, alignment berhenti meneruskan pose,
+`ready` menjadi false, dan FSM masuk `ABORT`. Land/takeover, lalu restart ZED,
+alignment, mapper, dan misi; jangan kalibrasi ulang saat terbang.
 
 Validasi sebelum membuka misi:
 
@@ -157,8 +176,15 @@ Terminal 4 — konversi bounding box menjadi landmark global:
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/shane/polinasi/install/setup.bash
+source /home/shane/ProjekAtaka/gazebo_sim/install/setup.bash
 ros2 launch point-cloud-test bb_proc_node.launch.py
+```
+
+Default BB sekarang memakai `/zed/aligned_pose`, sehingga landmark pohon dan
+ExternalNav berada pada frame yang sama:
+
+```bash
+ros2 topic info /zed/aligned_pose -v
 ```
 
 Validasi BB sebelum mission:
@@ -173,9 +199,15 @@ Terminal 5 — mapper, controller, FSM, safety monitor, dan analyzer:
 
 ```bash
 source /opt/ros/humble/setup.bash
-source /home/shane/polinasi/install/setup.bash
+source /home/shane/ProjekAtaka/gazebo_sim/install/setup.bash
 ros2 launch beehive_drone real_mission.launch.py auto_start:=false
 ```
+
+Saat pohon dipilih, FSM membekukan landmark, masuk `ALIGN_TO_TREE`, menahan XY,
+dan mensyaratkan yaw error di bawah 7.5 derajat selama 1.5 detik. Setelah itu
+barulah `APPROACH_TREE` berjalan pada slew maksimum 0.015 m per tick x 20 Hz =
+0.30 m/s. Tanpa obstacle dalam safety zone, vortex controller meneruskan goal
+final langsung; koreksi repulsive/vortex hanya aktif di dalam safety zone.
 
 Jangan menjalankan `pcl_proc_node` atau `bb_pcl_proc_node` kedua. Pastikan
 `/global_cylinders` berisi track dan `/map/trees` muncul sebelum mengharapkan
