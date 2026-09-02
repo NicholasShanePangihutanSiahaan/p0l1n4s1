@@ -25,8 +25,9 @@ vision_to_mavros:
 
 flight_manager:
   ros__parameters:
-    # Gate takeoff/hover menggunakan tinggi AGL dari lidar bawah.
-    altitude_source: rangefinder
+    # Fixed local-Z seperti odom_tester 0b8bedd. Rangefinder tetap tersedia
+    # untuk logging/safety, tetapi tidak menentukan target altitude.
+    altitude_source: local_position
     hover_tolerance: 0.2
     rangefinder_topic: /mavros/rangefinder/rangefinder
     rangefinder_timeout: 1.0
@@ -52,9 +53,9 @@ tree_mapper:
 
 mission_state_machine:
   ros__parameters:
-    flight_altitude: 1.5
+    flight_altitude: 2.1
     # Jarak horizontal titik approach terhadap pusat batang.
-    approach_distance: 1.5
+    approach_distance: 3.0
     tree_distance_tolerance: 0.5
     approach_goal_tolerance: 0.15
     verification_retry_limit: 3
@@ -79,8 +80,8 @@ mission_state_machine:
 
 dynamic_orbit_controller:
   ros__parameters:
-    orbit_radius: 1.5
-    orbit_altitude: 1.5
+    orbit_radius: 3.0
+    orbit_altitude: 2.1
     orbit_velocity: 0.25
     orbit_timeout: 180.0
     radial_tolerance: 0.3
@@ -95,11 +96,10 @@ position_setpoint_controller:
     max_vertical_step: 0.05
     target_timeout: 0.75
     output_frame: map
-    # EKF tetap memakai local-Z yang halus; rangefinder hanya menggeser target
-    # vertikal agar clearance terhadap permukaan tetap 1.5 m.
-    terrain_following_enabled: true
+    # Uji datar: satu local-Z 2.1 m dari takeoff sampai sebelum LANDING.
+    terrain_following_enabled: false
     rangefinder_topic: /mavros/rangefinder/rangefinder
-    desired_agl: 1.5
+    desired_agl: 2.1
     rangefinder_timeout: 0.50
     rangefinder_min_valid: 0.08
     rangefinder_max_valid: 8.0
@@ -143,6 +143,6 @@ mission_analyzer:
     console_period: 2.0
     autosave_period: 10.0
     rangefinder_topic: /mavros/rangefinder/rangefinder
-    expected_takeoff_altitude: 1.5
-    expected_approach_distance: 1.5
-    expected_orbit_radius: 1.5
+    expected_takeoff_altitude: 2.1
+    expected_approach_distance: 3.0
+    expected_orbit_radius: 3.0
