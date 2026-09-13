@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Tree.msg"
 
   "msg/TreeArray.msg"
+  "msg/ActiveTree.msg"
 
 )
 

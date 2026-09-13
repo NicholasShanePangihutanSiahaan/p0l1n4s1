@@ -49,6 +49,7 @@ tree_mapper:
     max_trunk_base_height: 3.0
     min_cylinder_confidence: 0.25
     position_alpha: 0.20
+    label_pohon: pohon
 
 mission_state_machine:
   ros__parameters:
@@ -75,6 +76,7 @@ mission_state_machine:
     vision_pose_topic: /mavros/vision_pose/pose
     vision_pose_timeout: 1.0
     vision_warmup_time: 5.0
+    orbit_radius: 3.0
     abort_mode: BRAKE
 
 dynamic_orbit_controller:

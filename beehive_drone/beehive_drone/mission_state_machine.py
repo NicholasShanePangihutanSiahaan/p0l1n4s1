@@ -6,9 +6,9 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from beehive_drone.mission_params import MissionConfig
-from geometry_msgs.msg import PoseStamped, Point
+from geometry_msgs.msg import PoseStamped, Point, Pose
 from std_msgs.msg import Bool, String, Float32
-from uav_interfaces.msg import TreeArray, Tree
+from uav_interfaces.msg import TreeArray, Tree, ActiveTree
 
 def euler_to_quaternion(roll, pitch, yaw):
     qx = math.sin(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) - math.cos(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
@@ -67,6 +67,7 @@ class MissionStateMachine(Node):
         self.declare_parameter('auto_start', True)
         self.declare_parameter('state_timeout', 120.0)
         self.declare_parameter('pose_timeout', 1.0)
+        self.declare_parameter('orbit_radius', 3.0)
         self.declare_parameter('post_takeoff_hover_time', 2.0)
         self.declare_parameter('require_vision_before_start', False)
         self.declare_parameter(
@@ -109,10 +110,12 @@ class MissionStateMachine(Node):
             0.5, float(self.get_parameter('align_yaw_hold_time').value))
         self.require_frame_alignment = bool(
             self.get_parameter('require_frame_alignment').value)
+        self.orbit_radius = float(self.get_parameter('orbit_radius').value)
 
         # ==========================================
         # Variabel State & Navigasi
         # ==========================================
+        self.previous_state = None
         self.state = "WAIT_START"
         self.state_since = self.get_clock().now()
         self.start_requested = self.auto_start
@@ -139,6 +142,11 @@ class MissionStateMachine(Node):
         self.last_vision_time = None
         self.last_vision_wait_log = None
         self.frame_alignment_ready = not self.require_frame_alignment
+        
+        # Variabel deteksi bunga
+        self.receiving_flower_pose = False
+        self.done_receiving_flower_pose = False # memastikan cuman sekali terima data flower untuk sekali orbit
+        self.flower_pose = None
 
         # Variabel Telemetri Penerbangan (Dari Flight Manager)
         self.is_armed = False
@@ -159,6 +167,7 @@ class MissionStateMachine(Node):
         # Subscriber
         # ==========================================
         self.pose_sub = self.create_subscription(PoseStamped, "/mavros/local_position/pose", self.pose_cb, qos_sensor)
+        self.flower_sub = self.create_subscription(Pose, "/mission/current_flower", self.flower_cb, 10)
         self.orbit_status_sub = self.create_subscription(String, "/control/orbit_status", self.orbit_status_cb, 10)
         self.tree_sub = self.create_subscription(TreeArray, "/map/trees", self.tree_cb, qos_map)
         self.create_subscription(
@@ -176,6 +185,10 @@ class MissionStateMachine(Node):
         # ==========================================
         # Publisher
         # ==========================================
+        
+        # Pohon saat ini
+        self.active_tree_pub = self.create_publisher(ActiveTree, "/mission/current_tree", 10)
+        
         # Command ke Flight Manager
         self.cmd_mode_pub = self.create_publisher(String, "/flight/cmd/set_mode", 10)
         self.cmd_arm_pub = self.create_publisher(Bool, "/flight/cmd/set_arm", 10)
@@ -184,6 +197,7 @@ class MissionStateMachine(Node):
         
         # Command ke Dynamic Orbit Controller
         self.orbit_start_pub = self.create_publisher(Bool, "/control/orbit_start", 10)
+        self.orbit_pause_pub = self.create_publisher(Bool, "/control/orbit_pause", 10)
         self.orbit_target_pub = self.create_publisher(Point, "/control/orbit_target", 10)
         
         # Command navigasi lokal
@@ -212,6 +226,11 @@ class MissionStateMachine(Node):
     def orbit_status_cb(self, msg): self.orbit_status = msg.data
     def tree_cb(self, msg): self.trees = msg.trees
     def alignment_cb(self, msg): self.frame_alignment_ready = bool(msg.data)
+    
+    def flower_cb(self,msg):
+        if self.done_receiving_flower_pose == False:
+            self.receiving_flower_pose = True
+            self.flower_pose = deepcopy(msg)
 
     def vision_pose_cb(self, _msg):
         now = self.get_clock().now()
@@ -259,6 +278,7 @@ class MissionStateMachine(Node):
     def safety_reason_cb(self, msg): self.safety_reason = msg.data
 
     def transition(self, state):
+        self.previous_state = self.state
         self.state = state
         self.state_since = self.get_clock().now()
         if state == 'ABORT':
@@ -278,6 +298,11 @@ class MissionStateMachine(Node):
 
     def normalize_angle(self, angle):
         return math.atan2(math.sin(angle), math.cos(angle))
+    
+    def pub_current_tree(self, active_tree, is_orbiting=False):
+        current_tree_orb = ActiveTree()
+        current_tree_orb.is_currenty_orbiting = is_orbiting
+        current_tree_orb.tree = deepcopy(active_tree)
 
     def current_yaw(self):
         return quaternion_to_yaw(self.current_pose.pose.orientation)
@@ -327,11 +352,11 @@ class MissionStateMachine(Node):
         if self.current_pose is None:
             return
 
-        active = self.state not in ('WAIT_START', 'DONE', 'ABORT', 'MANUAL_OVERRIDE')
+        active = self.state not in ('WAIT_START', 'DONE', 'ABORT', 'MANUAL_OVERRIDE', 'MANUAL_SPRAY')
         navigation_states = (
             'POST_TAKEOFF_HOVER',
-            'EXPLORE_ROW', 'ALIGN_TO_TREE', 'APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT',
-            'WAIT_ORBIT', 'POST_ORBIT_HOVER', 'ALIGN_HOME', 'END_OF_ROW',
+            'EXPLORE_ROW', 'ALIGN_TO_TREE', 'APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT', 'ALIGN_TO_LAST_ORBIT',
+            'WAIT_ORBIT', 'POST_ORBIT_HOVER', 'ALIGN_HOME', 'END_OF_ROW', 'DETECT_FLOWER', 'ALIGN_TO_FLOWER', 'FLOWER_ALIGNED',
             'CRAB_SCAN', 'RETURN_TO_HOME', 'HOME_HOVER', 'FINAL_SPIN')
         self.publish_setpoint_enabled(self.state in navigation_states)
         pose_age = float('inf') if self.last_pose_time is None else \
@@ -350,8 +375,17 @@ class MissionStateMachine(Node):
         expected_land_mode = self.state == 'LANDING' and self.current_mode == 'LAND'
         if active and self.is_armed and not expected_land_mode and \
                 self.current_mode not in ('GUIDED', ''):
-            self.transition('MANUAL_OVERRIDE')
-            self.get_logger().warning(f'Manual takeover terdeteksi: mode={self.current_mode}')
+            if self.state == 'FLOWER_ALIGNED':
+                # Drone operator spray secara manual
+                self.transition('MANUAL_SPRAY')
+                self.get_logger().info(f'Switch mode terdeteksi di FLOWER_ALIGNED! Masuk ke MANUAL_SPRAY (mode={self.current_mode})')
+            else:
+                # Drone operator override
+                self.transition('MANUAL_OVERRIDE')
+                self.get_logger().warning(f'Manual takeover terdeteksi: mode={self.current_mode}')
+        elif self.state == 'MANUAL_SPRAY' and self.current_mode == 'GUIDED':
+            self.transition('ALIGN_TO_LAST_ORBIT')
+            self.get_logger().info('Mode kembali ke GUIDED dari MANUAL_SPRAY! Berpindah ke ALIGN_TO_LAST_ORBIT.')
         elapsed = (self.get_clock().now() - self.state_since).nanoseconds * 1e-9
         timeout_exempt = ('WAIT_START', 'EXPLORE_ROW', 'WAIT_ORBIT', 'LANDING', 'DONE',
                           'ABORT', 'MANUAL_OVERRIDE')
@@ -364,6 +398,11 @@ class MissionStateMachine(Node):
 
         msg = String(); msg.data = self.state
         self.fsm_status_pub.publish(msg)
+        
+        if active and self.state in ('ALIGN_TO_TREE', 'APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT', 'WAIT_ORBIT'):
+            self.pub_current_tree(self.target_tree, True)
+        else:
+            self.pub_current_tree(None, False)
 
         # --- FASE PRE-FLIGHT ---
         if self.state == 'WAIT_START':
@@ -590,7 +629,12 @@ class MissionStateMachine(Node):
             self.transition("WAIT_ORBIT")
 
         elif self.state == "WAIT_ORBIT":
-            if self.orbit_status == "ORBIT_COMPLETED":
+            if self.receiving_flower_pose and self.done_receiving_flower_pose == False:
+                self.transition("DETECT_FLOWER")
+                self.get_logger().info(
+                    "Flower DETECTED, Align dengan flower"
+                )
+            elif self.orbit_status == "ORBIT_COMPLETED":
                 # 1. Matikan perintah orbit
                 stop_msg = Bool(); stop_msg.data = False
                 self.orbit_start_pub.publish(stop_msg)
@@ -628,6 +672,53 @@ class MissionStateMachine(Node):
                 self.transition('ABORT')
                 self.get_logger().error(f'ABORT: {self.orbit_status}')
 
+        elif self.state == "DETECT_FLOWER":
+            pause_msg = Bool(); pause_msg.data = True
+            self.orbit_pause_pub.publish(pause_msg)
+            self.transition("ALIGN_TO_FLOWER")
+            
+        elif self.state == "ALIGN_TO_FLOWER":
+            # logika align sama flower
+            if self.flower_pose is None or self.target_tree is None:
+                self.get_logger().error("Data flower atau target_tree tidak ada! Melakukan ABORT.")
+                self.transition("ABORT")
+                return
+            tree_x = self.target_tree.x
+            tree_y = self.target_tree.y
+            flower_x = self.flower_pose.position.x
+            flower_y = self.flower_pose.position.y
+            
+            dx = flower_x - tree_x
+            dy = flower_y - tree_y
+            target_angle = math.atan2(dy, dx)
+            
+            # Goal posisi drone (x,y) pada radius orbit yang menghadap langsung ke bunga
+            goal_x = tree_x + self.orbit_radius * math.cos(target_angle)
+            goal_y = tree_y + self.orbit_radius * math.sin(target_angle)
+            
+            # Arah bunga ke drone
+            target_yaw = math.atan2(flower_y - cy, flower_x - cx)
+            
+            self.publish_goal(goal_x, goal_y, target_yaw)
+            
+            dist_to_goal = self.distance(cx, cy, goal_x, goal_y)
+            if dist_to_goal <= self.approach_goal_tolerance and yaw_aligned(self.current_yaw(), target_yaw, self.align_yaw_tolerance):
+                self.transition("FLOWER_ALIGNED")
+                self.get_logger().info(f"Berhasil    dengan Bunga pada proyeksi ({goal_x:.2f}, {goal_y:.2f})")
+        
+        elif self.state == "FLOWER_ALIGNED":
+            # Cuman sekedar hover menunggu ambil alih dari drone operator
+            tree_x = self.target_tree.x
+            tree_y = self.target_tree.y
+            flower_x = self.flower_pose.position.x
+            flower_y = self.flower_pose.position.y
+
+            target_angle = math.atan2(flower_y - tree_y, flower_x - tree_x)
+            goal_x = tree_x + self.orbit_radius * math.cos(target_angle)
+            goal_y = tree_y + self.orbit_radius * math.sin(target_angle)
+            target_yaw = math.atan2(tree_y - cy, tree_x - cx)
+
+            self.publish_goal(goal_x, goal_y, target_yaw)
         elif self.state == "POST_ORBIT_HOVER":
             self.publish_goal(self.hold_x, self.hold_y, self.hold_yaw)
             # Hold berbasis waktu; noise relative_alt tidak mengulang timer.
@@ -640,6 +731,7 @@ class MissionStateMachine(Node):
                 self.get_logger().info("Hover stabil. Menyesuaikan yaw menuju home.")
 
         elif self.state == "ALIGN_HOME":
+            self.done_receiving_flower_pose = False
             if self.home_pose is None:
                 self.get_logger().error("Home belum tersimpan; menahan posisi untuk keselamatan.")
                 self.publish_goal(self.hold_x, self.hold_y, self.hold_yaw)
@@ -783,6 +875,18 @@ class MissionStateMachine(Node):
         elif self.state == 'MANUAL_OVERRIDE':
             # Tidak mengirim setpoint/mode apa pun; pilot RC memegang kendali penuh.
             self.publish_setpoint_enabled(False)
+            
+        elif self.state == 'MANUAL_SPRAY':
+            # Tidak mengirim setpoint/mode apa pun; pilot RC memegang kendali penuh.
+            self.publish_setpoint_enabled(False)
+        elif self.state == 'ALIGN_TO_LAST_ORBIT':
+            pause_msg = Bool(); pause_msg.data = False
+            self.orbit_pause_pub.publish(pause_msg)
+            self.transition("WAIT_ORBIT")
+            self.done_receiving_flower_pose = True
+            self.receiving_flower_pose = False
+            self.flower_pose = None
+            
 
 def main(args=None):
     rclpy.init(args=args)

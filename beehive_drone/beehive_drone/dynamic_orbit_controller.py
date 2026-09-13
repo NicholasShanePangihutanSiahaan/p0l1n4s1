@@ -3,6 +3,7 @@
 import math
 import rclpy
 from rclpy.node import Node
+from copy import deepcopy
 from beehive_drone.mission_params import MissionConfig
 from geometry_msgs.msg import PoseStamped, Point
 from std_msgs.msg import Bool, String
@@ -36,11 +37,13 @@ class DynamicOrbitController(Node):
         self.declare_parameter('radial_tolerance', 0.7)
         self.declare_parameter('yaw_offset', 0.0)
         self.declare_parameter('completion_tolerance_degrees', 3.0)
+        self.declare_parameter('toleransi_radius_balik_dari_pause', 0.10)
         self.orbit_radius = float(self.get_parameter('orbit_radius').value)
         self.orbit_altitude = float(self.get_parameter('orbit_altitude').value)
         self.orbit_velocity = float(self.get_parameter('orbit_velocity').value)
         self.orbit_timeout = float(self.get_parameter('orbit_timeout').value)
         self.radial_tolerance = float(self.get_parameter('radial_tolerance').value)
+        self.toleransi_radius_balik_dari_pause = float(self.get_parameter('toleransi_radius_balik_dari_pause').value)
         self.yaw_offset = float(self.get_parameter('yaw_offset').value)
         self.completion_angle = 2.0 * math.pi - math.radians(
             float(self.get_parameter('completion_tolerance_degrees').value))
@@ -49,6 +52,12 @@ class DynamicOrbitController(Node):
         # Variabel State
         # ==========================================
         self.is_orbiting = False
+        self.is_paused = False
+        self.transition_from_pause_to_orbit = False
+        self.last_pose_before_pause = None
+        self.pause_duration = 0
+        self.pause_start = None
+        self.faktorkan_pause = False
         self.tree_x = 0.0
         self.tree_y = 0.0
         self.tree_z = 0.0
@@ -81,6 +90,13 @@ class DynamicOrbitController(Node):
             self.start_callback, 
             10
         )
+        
+        self.pause_sub = self.create_subscription(
+            Bool, 
+            "/control/orbit_pause", 
+            self.pause_callback, 
+            10
+        )
 
         # ==========================================
         # Publisher
@@ -106,6 +122,24 @@ class DynamicOrbitController(Node):
     def pose_callback(self, msg):
         self.current_pose = msg
 
+    def pause_callback(self, msg):
+        if not self.is_paused and msg.data:
+            self.get_logger().info("WARNING: Orbit dipause.")
+            if self.current_pose is not None:
+                self.last_pose_before_pause = deepcopy(self.current_pose)
+            else:
+                self.get_logger().warn("WARNING: Tidak ada data pose sebagai checkpoint.")
+            self.is_paused = True
+            self.pause_start = self.get_clock().now()
+            self.pause_duration = 0
+            self.faktorkan_pause = True
+            
+        elif self.is_paused and self.is_orbiting and not msg.data:
+            self.get_logger().info("WARNING: Transisi kembali ke checkpoint orbit.")
+            self.transition_from_pause_to_orbit = True
+            self.is_paused = False
+            
+            
     def target_callback(self, msg):
         self.tree_x = msg.x
         self.tree_y = msg.y
@@ -130,9 +164,77 @@ class DynamicOrbitController(Node):
         self.status_pub.publish(msg)
 
     def control_loop(self):
+        if self.is_paused:
+            self.publish_status("ORBIT_PAUSED")
+            return
+        
+        if self.transition_from_pause_to_orbit:
+            self.publish_status("ORBIT_TRANSITION_FROM_PAUSE_TO_ORBIT")
+            if self.last_pose_before_pause is None or self.current_pose is None:
+                self.get_logger().error("WARNING: POSE CHECKPOINT TIDAK DITEMUKAN. Membatalkan transisi.")
+                self.transition_from_pause_to_orbit = False
+                return
+            
+            # Cek jika sudah sampai posisi semula
+            distance_to_semula = math.sqrt(
+                  (self.last_pose_before_pause.pose.position.x - self.current_pose.pose.position.x) ** 2 +
+                  (self.last_pose_before_pause.pose.position.y - self.current_pose.pose.position.y) ** 2 +
+                  (self.last_pose_before_pause.pose.position.z - self.current_pose.pose.position.z) ** 2
+            )
+            if distance_to_semula <= self.toleransi_radius_balik_dari_pause:
+                self.transition_from_pause_to_orbit = False
+                self.last_pose_before_pause = None
+                
+                dx = self.current_pose.pose.position.x - self.tree_x
+                dy = self.current_pose.pose.position.y - self.tree_y
+                current_angle = math.atan2(dy, dx)
+                self.command_angle = current_angle
+                self.last_angle = current_angle
+
+                self.get_logger().info("SUCCESS: Sampai di checkpoint. Memulai kembali orbit.")
+                self.pause_duration += (self.get_clock().now() - self.pause_start).nanoseconds
+                self.pause_start = None
+                return
+            
+            # Transisi balek ke orbit
+            yaw_to_tree = math.atan2(
+                self.tree_y - self.last_pose_before_pause.pose.position.y,
+                self.tree_x - self.last_pose_before_pause.pose.position.x)
+            target_yaw = yaw_to_tree - self.yaw_offset
+    
+            qx, qy, qz, qw = euler_to_quaternion(0, 0, target_yaw)
+            sp = PoseStamped()
+            sp.header.frame_id = "odom"
+            sp.header.stamp = self.get_clock().now().to_msg()
+            
+            sp.pose.position.x = self.last_pose_before_pause.pose.position.x
+            sp.pose.position.y = self.last_pose_before_pause.pose.position.y
+            # Target dari FSM membawa koordinat Z lokal yang dicapai setelah
+            # CommandTOL. Hindari menganggap altitude terhadap home sebagai Z lokal.
+            sp.pose.position.z = self.tree_z
+            
+            sp.pose.orientation.x = qx
+            sp.pose.orientation.y = qy
+            sp.pose.orientation.z = qz
+            sp.pose.orientation.w = qw
+            
+            self.setpoint_pub.publish(sp)
+            return
+                
         if not self.is_orbiting or self.current_pose is None:
             return
-        if self.orbit_start_time is not None and \
+        if self.orbit_start_time is not None and self.faktorkan_pause and \
+                ((self.get_clock().now() - self.orbit_start_time).nanoseconds - self.pause_duration) * 1e-9 > self.orbit_timeout:
+            # Faktorkan waktu pause dalam timeout
+            self.pause_duration = 0
+            self.faktorkan_pause = False
+            
+            self.is_orbiting = False
+            self.publish_status("ORBIT_FAILED_TIMEOUT")
+            self.get_logger().error("Orbit timeout; target dibatalkan.")
+            return
+            
+        elif self.orbit_start_time is not None and \
                 (self.get_clock().now() - self.orbit_start_time).nanoseconds * 1e-9 > self.orbit_timeout:
             self.is_orbiting = False
             self.publish_status("ORBIT_FAILED_TIMEOUT")

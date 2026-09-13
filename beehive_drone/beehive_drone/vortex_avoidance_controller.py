@@ -88,7 +88,7 @@ class VortexAvoidanceController(Node):
 
         # 1. Tentukan Goal Mana yang Sedang Aktif
         active_goal = None
-        if self.fsm_state in ["START_ORBIT", "WAIT_ORBIT"]:
+        if self.fsm_state in ["START_ORBIT", "WAIT_ORBIT", "ALIGN_TO_LAST_ORBIT"]:
             active_goal = self.orbit_goal
         else:
             active_goal = self.fsm_goal

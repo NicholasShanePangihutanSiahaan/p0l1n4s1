@@ -34,11 +34,14 @@ class TreeMapper(Node):
         self.declare_parameter("min_radius", 0.10)
         self.declare_parameter("max_radius", 0.65)
         self.declare_parameter("min_height", 0.8)
+        self.declare_parameter("label_pohon", "pohon")
         self.declare_parameter("max_height", 8.0)
         self.declare_parameter("max_trunk_base_height", 0.65)
         self.declare_parameter("min_cylinder_confidence", 0.20)
         self.declare_parameter("position_alpha", 0.25)
         self.frame_id = self.get_parameter("frame_id").value
+        
+        self.label_pohon = self.get_parameter("label_pohon").value()
 
         # maksimum jarak agar dianggap pohon yang sama
         self.merge_distance = float(self.get_parameter("merge_distance").value)
@@ -135,6 +138,8 @@ class TreeMapper(Node):
     def pcl_cylinders_callback(self, msg):
         """Masukkan cylinder PCL yang sedang terlihat ke database pohon."""
         for tracked in msg.cylinders:
+            if tracked.type != self.label_pohon:
+                continue
             cylinder = tracked.cylinder
             if not cylinder.is_valid or tracked.missed_count != 0:
                 continue
