@@ -41,7 +41,7 @@ class TreeMapper(Node):
         self.declare_parameter("position_alpha", 0.25)
         self.frame_id = self.get_parameter("frame_id").value
         
-        self.label_pohon = self.get_parameter("label_pohon").value()
+        self.label_pohon = str(self.get_parameter("label_pohon").value)
 
         # maksimum jarak agar dianggap pohon yang sama
         self.merge_distance = float(self.get_parameter("merge_distance").value)

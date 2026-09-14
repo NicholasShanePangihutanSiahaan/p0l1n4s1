@@ -86,9 +86,12 @@ dynamic_orbit_controller:
     orbit_velocity: 0.25
     orbit_timeout: 180.0
     radial_tolerance: 0.3
+    toleransi_radius_balik_dari_pause: 0.1 # Ketika pause baru resume
     yaw_offset: 0.0
     completion_tolerance_degrees: 2.0
-
+detect_flower:
+  ros__parameters:
+    label_bunga: bunga
 position_setpoint_controller:
   ros__parameters:
     publish_rate: 20.0

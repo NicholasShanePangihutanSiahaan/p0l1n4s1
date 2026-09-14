@@ -12,6 +12,12 @@ from pcl_cstm_msg.msg import TrackedCylinderArray
 class DetectFlowerNode(Node):
   def __init__(self):
     super().__init__("detect_flower_node")
+    
+    self.declare_parameter('label_bunga', 'bunga')
+    
+    self.label_bunga = str(self.get_parameter('label_bunga').value)
+    
+    
     qos_reliable = QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE,
                 history=HistoryPolicy.KEEP_LAST,
@@ -49,7 +55,7 @@ class DetectFlowerNode(Node):
   def obj_det(self,msg):
     flower_collection_temp = []
     for tracked in msg.cylinders:
-      if tracked.type != 'bunga':
+      if tracked.type != self.label_bunga:
         continue
       else:
         point = Point()
@@ -86,3 +92,20 @@ class DetectFlowerNode(Node):
     else:
       self.current_tree = None
       self.flower_pose = None
+      
+def main(args=None):
+    rclpy.init(args=args)
+    node = DetectFlowerNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    except RuntimeError:
+        if rclpy.ok():
+            raise
+    node.destroy_node()
+    if rclpy.ok():
+        rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()
