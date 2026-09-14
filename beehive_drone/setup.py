@@ -7,7 +7,7 @@ package_name = 'beehive_drone'
 setup(
     name=package_name,
     version='0.0.0',
-    packages=[package_name],
+    packages=[package_name, f'{package_name}.missions'],
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
@@ -39,6 +39,7 @@ setup(
             'sim_rangefinder_bridge = beehive_drone.sim_rangefinder_bridge:main',
             'vision_to_mavros = beehive_drone.vision_to_mavros:main',
             'zed_frame_alignment = beehive_drone.frame_alignment:main',
+            'detect_flower = beehive_drone.detect_flower_pose:main',
         ],
     },
 )

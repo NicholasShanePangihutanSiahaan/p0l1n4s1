@@ -6,6 +6,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from beehive_drone.mission_params import MissionConfig
+from beehive_drone.missions import MISSION_STRATEGIES
 from geometry_msgs.msg import PoseStamped, Point, Pose
 from std_msgs.msg import Bool, String, Float32
 from uav_interfaces.msg import TreeArray, Tree, ActiveTree
@@ -48,6 +49,23 @@ class MissionStateMachine(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=1
         )
+        
+        # ==========================================
+        # Strategy Registry Lookup
+        # ==========================================
+        self.declare_parameter('mission_type', 'flower_mission')
+        mission_type = str(self.get_parameter('mission_type').value)
+        
+        strategy_cls = MISSION_STRATEGIES.get(mission_type)
+        if strategy_cls is None:
+            valid_keys = list(MISSION_STRATEGIES.keys())
+            self.get_logger().error(
+                f"Invalid mission_type: '{mission_type}'. Registered strategies: {valid_keys}"
+            )
+            raise ValueError(f"Unknown mission strategy '{mission_type}'")
+
+        self.mission_strategy = strategy_cls()
+        self.get_logger().info(f"Loaded mission strategy: '{mission_type}'")
 
         # ==========================================
         # Parameter Strategi Kebun 
@@ -353,12 +371,7 @@ class MissionStateMachine(Node):
             return
 
         active = self.state not in ('WAIT_START', 'DONE', 'ABORT', 'MANUAL_OVERRIDE', 'MANUAL_SPRAY')
-        navigation_states = (
-            'POST_TAKEOFF_HOVER',
-            'EXPLORE_ROW', 'ALIGN_TO_TREE', 'APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT', 'ALIGN_TO_LAST_ORBIT',
-            'WAIT_ORBIT', 'POST_ORBIT_HOVER', 'ALIGN_HOME', 'END_OF_ROW', 'DETECT_FLOWER', 'ALIGN_TO_FLOWER', 'FLOWER_ALIGNED',
-            'CRAB_SCAN', 'RETURN_TO_HOME', 'HOME_HOVER', 'FINAL_SPIN')
-        self.publish_setpoint_enabled(self.state in navigation_states)
+        self.publish_setpoint_enabled(self.state in self.mission_strategy.navigation_states)
         pose_age = float('inf') if self.last_pose_time is None else \
             (self.get_clock().now() - self.last_pose_time).nanoseconds * 1e-9
         if active and pose_age > self.pose_timeout:
@@ -387,9 +400,8 @@ class MissionStateMachine(Node):
             self.transition('ALIGN_TO_LAST_ORBIT')
             self.get_logger().info('Mode kembali ke GUIDED dari MANUAL_SPRAY! Berpindah ke ALIGN_TO_LAST_ORBIT.')
         elapsed = (self.get_clock().now() - self.state_since).nanoseconds * 1e-9
-        timeout_exempt = ('WAIT_START', 'EXPLORE_ROW', 'WAIT_ORBIT', 'LANDING', 'DONE',
-                          'ABORT', 'MANUAL_OVERRIDE')
-        if active and self.state not in timeout_exempt and elapsed > self.state_timeout:
+        
+        if active and self.state not in self.mission_strategy.timeout_exempt_states and elapsed > self.state_timeout:
             self.transition('ABORT')
             self.get_logger().error(f'ABORT: timeout state setelah {elapsed:.1f}s.')
 
@@ -403,490 +415,8 @@ class MissionStateMachine(Node):
             self.pub_current_tree(self.target_tree, True)
         else:
             self.pub_current_tree(None, False)
-
-        # --- FASE PRE-FLIGHT ---
-        if self.state == 'WAIT_START':
-            if self.start_requested and not self.frame_alignment_ready:
-                self.get_logger().warning(
-                    'WAIT_START: menunggu alignment ZED-FC terkunci.',
-                    throttle_duration_sec=2.0)
-            elif self.start_requested and not self.vision_ready():
-                self.log_vision_wait()
-            elif self.start_requested and (self.safety_ok or not self.require_safety):
-                # Capture terakhir tepat sebelum arm sebagai titik takeoff lokal.
-                self.home_pose = (cx, cy, self.current_yaw())
-                self.transition('INIT')
-                self.get_logger().info('Start diterima dan sensor sehat; memulai preflight.')
-
-        elif self.state == "INIT":
-            mode_msg = String(); mode_msg.data = "GUIDED"
-            self.cmd_mode_pub.publish(mode_msg)
-            self.transition("WAIT_GUIDED")
-            self.retry_counter = 0
-            self.get_logger().info("Meminta transisi ke mode GUIDED...")
-
-        elif self.state == "WAIT_GUIDED":
-            if self.current_mode == "GUIDED":
-                arm_msg = Bool(); arm_msg.data = True
-                self.takeoff_yaw = self.current_yaw()
-                self.cmd_arm_pub.publish(arm_msg)
-                self.transition("WAIT_ARM")
-                self.retry_counter = 0
-                self.get_logger().info("Mode GUIDED aktif. Meminta Arming Motor...")
-            else:
-                self.retry_counter += 1
-                if self.retry_counter > 20:  # Ulangi perintah setiap 2 detik (20 x 0.1s)
-                    mode_msg = String(); mode_msg.data = "GUIDED"
-                    self.cmd_mode_pub.publish(mode_msg)
-                    self.retry_counter = 0
-
-        elif self.state == "WAIT_ARM":
-            if self.is_armed:
-                if not hasattr(self, 'arm_delay_start'):
-                    self.arm_delay_start = self.get_clock().now()
-                elapsed_ns = (self.get_clock().now() - self.arm_delay_start).nanoseconds
-                if elapsed_ns >= 350_000_000:
-                    takeoff_msg = Float32(); takeoff_msg.data = self.flight_altitude
-                    self.cmd_takeoff_pub.publish(takeoff_msg)
-                    self.transition("WAIT_TAKEOFF")
-                    self.retry_counter = 0
-                    self.get_logger().info(f"Motor Bersenjata (Armed). Takeoff ke ketinggian {self.flight_altitude}m...")
-            else:
-                self.retry_counter += 1
-                if self.retry_counter > 20:  # Ulangi perintah setiap 2 detik
-                    arm_msg = Bool(); arm_msg.data = True
-                    self.cmd_arm_pub.publish(arm_msg)
-                    self.get_logger().info("Mencoba Arming ulang... (Menunggu Pre-arm good dari ArduPilot)")
-                    self.retry_counter = 0
-
-        elif self.state == "WAIT_TAKEOFF":
-            if self.is_hovering:
-                self.hold_x = cx
-                self.hold_y = cy
-                self.hold_yaw = self.takeoff_yaw
-                self.navigation_altitude = self.current_pose.pose.position.z
-                self.last_tree_x = cx
-                self.last_tree_y = cy
-                self.transition("POST_TAKEOFF_HOVER")
-                self.get_logger().info(
-                    "Altitude takeoff tercapai. Menahan posisi selama "
-                    f"{self.post_takeoff_hover_time:.1f} detik.")
-
-        elif self.state == "POST_TAKEOFF_HOVER":
-            self.publish_goal(self.hold_x, self.hold_y, self.hold_yaw)
-            if elapsed >= self.post_takeoff_hover_time:
-                self.transition("EXPLORE_ROW")
-                self.get_logger().info(
-                    "Hover pasca-takeoff selesai. Mulai EXPLORE_ROW "
-                    "(mencari pohon).")
-
-        # --- FASE MISI UTAMA ---
-        elif self.state == "EXPLORE_ROW":
-            self.target_tree = self.find_uninspected_tree()
-            
-            if self.target_tree is not None:
-                self.verification_retries = 0
-                # Freeze one consistent landmark for alignment and approach.
-                # Mapper updates remain available for VERIFY_TREE only.
-                self.target_tree = deepcopy(self.target_tree)
-                self.frozen_target_tree = deepcopy(self.target_tree)
-                self.transition("ALIGN_TO_TREE")
-                self.get_logger().info(f"Pohon ditemukan di ({self.target_tree.x:.1f}, {self.target_tree.y:.1f})")
-            else:
-                target_x = cx + (self.explore_speed * self.explore_dir_x)
-                target_yaw = 0.0 if self.explore_dir_x > 0 else math.pi
-                self.publish_goal(target_x, cy, target_yaw)
-
-                dist_from_last = self.distance(cx, cy, self.last_tree_x, self.last_tree_y)
-                if dist_from_last > self.end_of_row_dist:
-                    self.transition("END_OF_ROW")
-                    self.get_logger().info("Lorong Habis. Bersiap pindah lorong.")
-
-        elif self.state == "ALIGN_TO_TREE":
-            tree = self.frozen_target_tree or self.target_tree
-            target_yaw = math.atan2(tree.y - cy, tree.x - cx)
-            self.publish_goal(cx, cy, target_yaw)
-            if yaw_aligned(
-                    self.current_yaw(), target_yaw, self.align_yaw_tolerance):
-                if self.align_yaw_since is None:
-                    self.align_yaw_since = self.get_clock().now()
-                held = (self.get_clock().now() - self.align_yaw_since).nanoseconds * 1e-9
-                if held >= self.align_yaw_hold_time:
-                    self.transition("APPROACH_TREE")
-                    self.get_logger().info(
-                        'Yaw ke pohon stabil; memulai translasi approach.')
-            else:
-                self.align_yaw_since = None
-
-        elif self.state == "APPROACH_TREE":
-            tree = self.frozen_target_tree or self.target_tree
-            # Hitung sudut arah (yaw) dari drone menuju pohon
-            target_yaw = math.atan2(tree.y - cy, tree.x - cx)
-            
-            # 1. Kalkulasi TITIK PENGEREMAN (2 meter di depan pohon)
-            stop_x = tree.x - (self.approach_safe_dist * math.cos(target_yaw))
-            stop_y = tree.y - (self.approach_safe_dist * math.sin(target_yaw))
-            
-            # 2. Hitung jarak drone ke TITIK PENGEREMAN (bukan ke pohon)
-            dist_to_stop = self.distance(cx, cy, stop_x, stop_y)
-            
-            # Arrival tolerance harus lebih kecil daripada toleransi verifikasi.
-            # Nilai lama 0.6 m membuat drone mulai verifikasi terlalu jauh.
-            if dist_to_stop > self.approach_goal_tolerance:
-                self.publish_goal(stop_x, stop_y, target_yaw)
-            else:
-                self.transition("VERIFY_TREE")
-                self.hover_timer = 0
-                self.get_logger().info("Titik pengereman tercapai. Hovering 4 detik untuk stabilisasi...")
         
-        elif self.state == "VERIFY_TREE":
-            # 1. Tahan posisi (Hovering) menghadap arah pohon target
-            target_yaw = math.atan2(self.target_tree.y - cy, self.target_tree.x - cx)
-            self.publish_goal(cx, cy, target_yaw)
-            
-            self.hover_timer += 1
-            
-            # Setelah 40 siklus (4 detik hovering stabil)
-            if self.hover_timer >= 40:
-                
-                # --- CARI POHON BERDASARKAN ID ASLI SECARA KETAT ---
-                target_matched_tree = None
-                for tree in self.trees:
-                    if tree.id == self.target_tree.id:
-                        target_matched_tree = tree
-                        break
-                
-                # Cek 1: Apakah ID pohon tersebut masih ada di database mapper?
-                if target_matched_tree is not None:
-                    
-                    # Cek 2: HITUNG JARAK RIILL AKTUAL DARI DRONE KE POHON TERSEBUT
-                    actual_dist_to_tree = self.distance(cx, cy, target_matched_tree.x, target_matched_tree.y)
-                    
-                    min_verify = max(
-                        0.1, self.approach_safe_dist - self.tree_distance_tolerance)
-                    max_verify = (
-                        self.approach_safe_dist + self.tree_distance_tolerance)
-                    if min_verify <= actual_dist_to_tree <= max_verify:
-                        self.target_tree = target_matched_tree  
-                        update_msg = Tree()
-                        update_msg.id = target_matched_tree.id
-                        update_msg.x = target_matched_tree.x
-                        update_msg.y = target_matched_tree.y
-                        update_msg.z = target_matched_tree.z
-                        update_msg.confidence = target_matched_tree.confidence
-                        update_msg.inspected = target_matched_tree.inspected
-                        update_msg.validated = True
-                        update_msg.orbit_count = target_matched_tree.orbit_count
-                        self.tree_update_pub.publish(update_msg)
-                        self.transition("START_ORBIT")
-                        self.get_logger().info(f"Verifikasi sukses! Pohon ID:{target_matched_tree.id} valid di jarak {actual_dist_to_tree:.2f}m. Memulai orbit.")
-                    else:
-                        self.verification_retries += 1
-                        if self.verification_retries <= self.verification_retry_limit:
-                            self.target_tree = deepcopy(target_matched_tree)
-                            self.frozen_target_tree = deepcopy(
-                                target_matched_tree)
-                            self.hover_timer = 0
-                            self.transition("ALIGN_TO_TREE")
-                            self.get_logger().warning(
-                                f"Pohon ID:{target_matched_tree.id} di {actual_dist_to_tree:.2f}m, "
-                                f"di luar rentang {min_verify:.2f}..{max_verify:.2f}m; "
-                                f"freeze ulang + align untuk koreksi approach "
-                                f"{self.verification_retries}/"
-                                f"{self.verification_retry_limit}.")
-                        else:
-                            self.get_logger().warning(
-                                f"Pohon ID:{target_matched_tree.id} gagal verifikasi "
-                                f"{self.verification_retries} kali; dihapus.")
-                            update_msg = Tree()
-                            update_msg.id = target_matched_tree.id
-                            update_msg.confidence = -1.0
-                            self.tree_update_pub.publish(update_msg)
-                            self.target_tree = None
-                            self.transition("EXPLORE_ROW")
-                        
-                else:
-                    self.get_logger().warn("Pohon Hantu hilang dari peta saat hovering! Membatalkan orbit.")
-                    if self.target_tree is not None:
-                        update_msg = Tree()
-                        update_msg.id = self.target_tree.id
-                        update_msg.confidence = -1.0 
-                        self.tree_update_pub.publish(update_msg)
-                    
-                    self.target_tree = None
-                    self.transition("EXPLORE_ROW")
-                    
-        elif self.state == "START_ORBIT":
-            target_msg = Point()
-            target_msg.x = self.target_tree.x
-            target_msg.y = self.target_tree.y
-            # Kirim Z lokal misi, bukan tinggi/geometri pusat pohon.
-            target_msg.z = float(self.navigation_altitude)
-            self.orbit_target_pub.publish(target_msg)
-            
-            start_msg = Bool(); start_msg.data = True
-            self.orbit_start_pub.publish(start_msg)
-            self.transition("WAIT_ORBIT")
-
-        elif self.state == "WAIT_ORBIT":
-            if self.receiving_flower_pose and self.done_receiving_flower_pose == False:
-                self.transition("DETECT_FLOWER")
-                self.get_logger().info(
-                    "Flower DETECTED, Align dengan flower"
-                )
-            elif self.orbit_status == "ORBIT_COMPLETED":
-                # 1. Matikan perintah orbit
-                stop_msg = Bool(); stop_msg.data = False
-                self.orbit_start_pub.publish(stop_msg)
-                
-                # 2. UPDATE MAPPER: Tandai pohon ini SUDAH DIINSPEKSI
-                if self.target_tree is not None:
-                    update_msg = Tree()
-                    update_msg.id = self.target_tree.id
-                    update_msg.x = self.target_tree.x
-                    update_msg.y = self.target_tree.y
-                    update_msg.z = self.target_tree.z
-                    update_msg.confidence = self.target_tree.confidence
-                    
-                    # INI KUNCI UTAMANYA:
-                    update_msg.inspected = True 
-                    update_msg.validated = True
-                    update_msg.orbit_count = min(
-                        255, int(self.target_tree.orbit_count) + 1)
-                    
-                    self.tree_update_pub.publish(update_msg)
-                    self.get_logger().info(f"Pohon ID:{self.target_tree.id} ditandai SELESAI (Inspected).")
-
-                # Misi hanya menginspeksi satu pohon. Tahan posisi akhir orbit
-                # sebelum menghadap dan kembali ke titik takeoff.
-                self.hold_x = cx
-                self.hold_y = cy
-                self.hold_yaw = self.current_yaw()
-                self.hover_timer = 0
-                self.target_tree = None
-                self.transition("POST_ORBIT_HOVER")
-                self.get_logger().info(
-                    "Orbit satu pohon selesai. Hover sebelum kembali ke titik takeoff."
-                )
-            elif self.orbit_status.startswith('ORBIT_FAILED'):
-                self.transition('ABORT')
-                self.get_logger().error(f'ABORT: {self.orbit_status}')
-
-        elif self.state == "DETECT_FLOWER":
-            pause_msg = Bool(); pause_msg.data = True
-            self.orbit_pause_pub.publish(pause_msg)
-            self.transition("ALIGN_TO_FLOWER")
-            
-        elif self.state == "ALIGN_TO_FLOWER":
-            # logika align sama flower
-            if self.flower_pose is None or self.target_tree is None:
-                self.get_logger().error("Data flower atau target_tree tidak ada! Melakukan ABORT.")
-                self.transition("ABORT")
-                return
-            tree_x = self.target_tree.x
-            tree_y = self.target_tree.y
-            flower_x = self.flower_pose.position.x
-            flower_y = self.flower_pose.position.y
-            
-            dx = flower_x - tree_x
-            dy = flower_y - tree_y
-            target_angle = math.atan2(dy, dx)
-            
-            # Goal posisi drone (x,y) pada radius orbit yang menghadap langsung ke bunga
-            goal_x = tree_x + self.orbit_radius * math.cos(target_angle)
-            goal_y = tree_y + self.orbit_radius * math.sin(target_angle)
-            
-            # Arah bunga ke drone
-            target_yaw = math.atan2(flower_y - cy, flower_x - cx)
-            
-            self.publish_goal(goal_x, goal_y, target_yaw)
-            
-            dist_to_goal = self.distance(cx, cy, goal_x, goal_y)
-            if dist_to_goal <= self.approach_goal_tolerance and yaw_aligned(self.current_yaw(), target_yaw, self.align_yaw_tolerance):
-                self.transition("FLOWER_ALIGNED")
-                self.get_logger().info(f"Berhasil    dengan Bunga pada proyeksi ({goal_x:.2f}, {goal_y:.2f})")
-        
-        elif self.state == "FLOWER_ALIGNED":
-            # Cuman sekedar hover menunggu ambil alih dari drone operator
-            tree_x = self.target_tree.x
-            tree_y = self.target_tree.y
-            flower_x = self.flower_pose.position.x
-            flower_y = self.flower_pose.position.y
-
-            target_angle = math.atan2(flower_y - tree_y, flower_x - tree_x)
-            goal_x = tree_x + self.orbit_radius * math.cos(target_angle)
-            goal_y = tree_y + self.orbit_radius * math.sin(target_angle)
-            target_yaw = math.atan2(tree_y - cy, tree_x - cx)
-
-            self.publish_goal(goal_x, goal_y, target_yaw)
-        elif self.state == "POST_ORBIT_HOVER":
-            self.publish_goal(self.hold_x, self.hold_y, self.hold_yaw)
-            # Hold berbasis waktu; noise relative_alt tidak mengulang timer.
-            self.hover_timer += 1
-
-            required_ticks = int(MissionConfig.POST_ORBIT_HOVER_TIME / 0.1)
-            if self.hover_timer >= required_ticks:
-                self.hover_timer = 0
-                self.transition("ALIGN_HOME")
-                self.get_logger().info("Hover stabil. Menyesuaikan yaw menuju home.")
-
-        elif self.state == "ALIGN_HOME":
-            self.done_receiving_flower_pose = False
-            if self.home_pose is None:
-                self.get_logger().error("Home belum tersimpan; menahan posisi untuk keselamatan.")
-                self.publish_goal(self.hold_x, self.hold_y, self.hold_yaw)
-                return
-
-            home_x, home_y, _ = self.home_pose
-            yaw_to_home = math.atan2(home_y - cy, home_x - cx)
-            self.publish_goal(self.hold_x, self.hold_y, yaw_to_home)
-
-            yaw_error = abs(self.normalize_angle(yaw_to_home - self.current_yaw()))
-            aligned = yaw_error <= MissionConfig.HOME_YAW_TOLERANCE
-            # Alignment hanya bergantung pada yaw, bukan noise altitude.
-            self.hover_timer = self.hover_timer + 1 if aligned else 0
-
-            required_ticks = int(MissionConfig.HOME_ALIGN_TIME / 0.1)
-            if self.hover_timer >= required_ticks:
-                self.hover_timer = 0
-                self.transition("RETURN_TO_HOME")
-                self.get_logger().info("Arah ke home stabil. Mulai kembali ke titik takeoff.")
-
-        elif self.state == "END_OF_ROW":
-            retreat_x = self.last_tree_x - (self.approach_safe_dist * self.explore_dir_x)
-            target_yaw = 0.0 if self.explore_dir_x > 0 else math.pi
-            
-            self.publish_goal(retreat_x, self.last_tree_y, target_yaw)
-            
-            if abs(cx - retreat_x) < 0.5:
-                self.explore_dir_x *= -1.0 
-                self.crab_start_y = cy
-                self.transition("CRAB_SCAN")
-                self.get_logger().info("Mundur selesai. Memulai Crab Scan 90 derajat.")
-
-        elif self.state == "CRAB_SCAN":
-            target_y = cy + (self.crab_speed * self.explore_dir_y)
-            target_yaw = 0.0 if self.explore_dir_x > 0 else math.pi
-            self.publish_goal(cx, target_y, target_yaw)
-            
-            self.target_tree = self.find_uninspected_tree()
-            if self.target_tree is not None:
-                self.last_tree_y = self.target_tree.y
-                self.verification_retries = 0
-                self.target_tree = deepcopy(self.target_tree)
-                self.frozen_target_tree = deepcopy(self.target_tree)
-                self.transition("ALIGN_TO_TREE")
-                self.get_logger().info("Lorong baru ditemukan!")
-            else:
-                if abs(cy - self.crab_start_y) > self.end_of_farm_dist:
-                    self.transition("RETURN_TO_HOME")
-                    self.get_logger().info("Lahan habis. Cari jalur untuk pulang (RTH).")
-
-        elif self.state == "RETURN_TO_HOME":
-            if self.home_pose is None:
-                return
-
-            home_x, home_y, home_yaw = self.home_pose
-            target_yaw = math.atan2(home_y - cy, home_x - cx)
-            self.publish_goal(home_x, home_y, target_yaw)
-
-            if self.distance(cx, cy, home_x, home_y) < MissionConfig.HOME_POSITION_TOLERANCE:
-                self.hold_yaw = home_yaw
-                self.hover_timer = 0
-                self.transition("HOME_HOVER")
-                self.get_logger().info("Tiba di titik takeoff. Hover sebelum landing.")
-
-        elif self.state == "HOME_HOVER":
-            home_x, home_y, _ = self.home_pose
-            self.publish_goal(home_x, home_y, self.hold_yaw)
-            # Tahan posisi selama waktu yang ditentukan tanpa menjadikan
-            # relative_alt sebagai gate tambahan sebelum LAND.
-            self.hover_timer += 1
-
-            required_ticks = int(MissionConfig.HOME_HOVER_TIME / 0.1)
-            if self.hover_timer >= required_ticks:
-                self.transition("LANDING")
-                self.get_logger().info("Hover home selesai. Memulai pendaratan.")
-
-        elif self.state == "FINAL_SPIN":
-            qx = self.current_pose.pose.orientation.x
-            qy = self.current_pose.pose.orientation.y
-            qz = self.current_pose.pose.orientation.z
-            qw = self.current_pose.pose.orientation.w
-            current_yaw = math.atan2(2.0*(qw*qz + qx*qy), 1.0 - 2.0*(qy*qy + qz*qz))
-            
-            delta = current_yaw - self.last_yaw
-            if delta > math.pi: delta -= 2 * math.pi
-            elif delta < -math.pi: delta += 2 * math.pi
-            
-            self.spin_accumulated += abs(delta)
-            self.last_yaw = current_yaw
-            
-            self.target_tree = self.find_uninspected_tree()
-            if self.target_tree is not None:
-                self.verification_retries = 0
-                self.target_tree = deepcopy(self.target_tree)
-                self.frozen_target_tree = deepcopy(self.target_tree)
-                self.transition("ALIGN_TO_TREE")
-                self.get_logger().info("Pohon terlewat ditemukan saat Final Spin!")
-                return
-                
-            if self.spin_accumulated >= 2 * math.pi:
-                self.transition("LANDING")
-                self.get_logger().info("Area bersih. Memulai Pendaratan.")
-            else:
-                target_yaw = current_yaw + 0.2
-                self.publish_goal(cx, cy, target_yaw)
-
-        elif self.state == "LANDING":
-            now = self.get_clock().now()
-            last_command_age = (
-                float('inf') if self.last_landing_command_time is None else
-                (now - self.last_landing_command_time).nanoseconds * 1e-9)
-            # Satu command cukup setelah FC melaporkan LAND. Sebelum itu, retry
-            # dibatasi agar service MAVROS tidak dibanjiri pada loop FSM 10 Hz.
-            if landing_command_due(
-                    self.current_mode,
-                    last_command_age,
-                    self.landing_retry_interval):
-                land_msg = Bool(); land_msg.data = True
-                self.cmd_land_pub.publish(land_msg)
-                self.last_landing_command_time = now
-            # DONE hanya setelah FC benar-benar disarm; ketinggian rendah saja
-            # belum menjamin motor aman pada kendaraan nyata.
-            if not self.is_armed:
-                self.transition("DONE")
-                self.get_logger().info("Landing selesai. Misi DONE.")
-            
-        elif self.state == "DONE":
-            self.publish_setpoint_enabled(False)
-
-        elif self.state == 'ABORT':
-            self.publish_setpoint_enabled(False)
-            stop = Bool(); stop.data = False
-            self.orbit_start_pub.publish(stop)
-            # Kirim BRAKE satu kali. Pengiriman terus-menerus akan melawan pilot
-            # yang mencoba mengambil alih mode melalui RC setelah abort.
-            if not self.abort_command_sent:
-                mode = String(); mode.data = 'BRAKE'
-                self.cmd_mode_pub.publish(mode)
-                self.abort_command_sent = True
-
-        elif self.state == 'MANUAL_OVERRIDE':
-            # Tidak mengirim setpoint/mode apa pun; pilot RC memegang kendali penuh.
-            self.publish_setpoint_enabled(False)
-            
-        elif self.state == 'MANUAL_SPRAY':
-            # Tidak mengirim setpoint/mode apa pun; pilot RC memegang kendali penuh.
-            self.publish_setpoint_enabled(False)
-        elif self.state == 'ALIGN_TO_LAST_ORBIT':
-            pause_msg = Bool(); pause_msg.data = False
-            self.orbit_pause_pub.publish(pause_msg)
-            self.transition("WAIT_ORBIT")
-            self.done_receiving_flower_pose = True
-            self.receiving_flower_pose = False
-            self.flower_pose = None
-            
+        self.mission_strategy.execute(self,active,elapsed,cx,cy)
 
 def main(args=None):
     rclpy.init(args=args)
