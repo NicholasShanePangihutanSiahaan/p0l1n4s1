@@ -49,6 +49,8 @@ def generate_launch_description():
              parameters=[config, {
                  'output_directory': analyzer_output_directory}],
              output='screen'),
+        Node(package='beehive_drone', executable='flower_buzzer',
+             parameters=[config], output='screen'),
         Node(package='beehive_drone', executable='mission_state_machine',
              parameters=[config, {'auto_start': auto_start}], output='screen'),
     ])
