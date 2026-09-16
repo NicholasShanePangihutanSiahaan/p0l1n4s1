@@ -63,7 +63,7 @@ class DetectFlowerNode(Node):
         point.y = tracked.cylinder.pose.position.y
         point.z = tracked.cylinder.pose.position.z
         flower_collection_temp.append(point)
-    self.flower_collection - flower_collection_temp
+    self.flower_collection = flower_collection_temp
   
   def tree_cb(self, msg):
     if msg.is_currenty_orbiting:
@@ -86,6 +86,7 @@ class DetectFlowerNode(Node):
             self.flower_pose.position.y = flower.y
             self.flower_pose.position.z = flower.z
             self.flower_pub(self.flower_pose)
+            self.get_logger().info("Berhasil deteksi sebuah bunga!", throttle_duration_sec=0.5)
             pass
           else:
             continue
