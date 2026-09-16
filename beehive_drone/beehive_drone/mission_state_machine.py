@@ -11,30 +11,6 @@ from geometry_msgs.msg import PoseStamped, Point, Pose
 from std_msgs.msg import Bool, String, Float32
 from uav_interfaces.msg import TreeArray, Tree, ActiveTree
 
-def euler_to_quaternion(roll, pitch, yaw):
-    qx = math.sin(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) - math.cos(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
-    qy = math.cos(roll/2) * math.sin(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.cos(pitch/2) * math.sin(yaw/2)
-    qz = math.cos(roll/2) * math.cos(pitch/2) * math.sin(yaw/2) - math.sin(roll/2) * math.sin(pitch/2) * math.cos(yaw/2)
-    qw = math.cos(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
-    return qx, qy, qz, qw
-
-def quaternion_to_yaw(q):
-    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-    return math.atan2(siny_cosp, cosy_cosp)
-
-
-def landing_command_due(current_mode, last_command_age, retry_interval):
-    """Return whether the LAND request may be sent without flooding MAVROS."""
-    return current_mode != 'LAND' and last_command_age >= retry_interval
-
-
-def yaw_aligned(current_yaw, target_yaw, tolerance):
-    """Return true when the shortest yaw error is within tolerance."""
-    return abs(math.atan2(
-        math.sin(target_yaw - current_yaw),
-        math.cos(target_yaw - current_yaw))) <= tolerance
-
 class MissionStateMachine(Node):
     def __init__(self):
         super().__init__("mission_state_machine")
@@ -239,11 +215,35 @@ class MissionStateMachine(Node):
             self.home_pose = (
                 msg.pose.position.x,
                 msg.pose.position.y,
-                quaternion_to_yaw(msg.pose.orientation)
+                self.quaternion_to_yaw(msg.pose.orientation)
             )
     def orbit_status_cb(self, msg): self.orbit_status = msg.data
     def tree_cb(self, msg): self.trees = msg.trees
     def alignment_cb(self, msg): self.frame_alignment_ready = bool(msg.data)
+    
+    def euler_to_quaternion(roll, pitch, yaw):
+        qx = math.sin(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) - math.cos(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
+        qy = math.cos(roll/2) * math.sin(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.cos(pitch/2) * math.sin(yaw/2)
+        qz = math.cos(roll/2) * math.cos(pitch/2) * math.sin(yaw/2) - math.sin(roll/2) * math.sin(pitch/2) * math.cos(yaw/2)
+        qw = math.cos(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
+        return qx, qy, qz, qw
+
+    def quaternion_to_yaw(q):
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        return math.atan2(siny_cosp, cosy_cosp)
+
+
+    def landing_command_due(current_mode, last_command_age, retry_interval):
+        """Return whether the LAND request may be sent without flooding MAVROS."""
+        return current_mode != 'LAND' and last_command_age >= retry_interval
+
+
+    def yaw_aligned(current_yaw, target_yaw, tolerance):
+        """Return true when the shortest yaw error is within tolerance."""
+        return abs(math.atan2(
+            math.sin(target_yaw - current_yaw),
+            math.cos(target_yaw - current_yaw))) <= tolerance
     
     def flower_cb(self,msg):
         if self.done_receiving_flower_pose == False:
@@ -356,7 +356,7 @@ class MissionStateMachine(Node):
             if self.navigation_altitude is not None else self.flight_altitude
         )
         
-        qx, qy, qz, qw = euler_to_quaternion(0, 0, yaw)
+        qx, qy, qz, qw = self.euler_to_quaternion(0, 0, yaw)
         goal.pose.orientation.x = qx
         goal.pose.orientation.y = qy
         goal.pose.orientation.z = qz
