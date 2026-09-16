@@ -320,7 +320,7 @@ class MissionStateMachine(Node):
     def pub_current_tree(self, active_tree, is_orbiting=False):
         current_tree_orb = ActiveTree()
         current_tree_orb.is_currenty_orbiting = is_orbiting
-        current_tree_orb.tree = deepcopy(active_tree)
+        current_tree_orb.tree = active_tree
 
     def current_yaw(self):
         return quaternion_to_yaw(self.current_pose.pose.orientation)
