@@ -324,7 +324,7 @@ class MissionStateMachine(Node):
             current_tree_orb.tree = active_tree
 
     def current_yaw(self):
-        return quaternion_to_yaw(self.current_pose.pose.orientation)
+        return self.quaternion_to_yaw(self.current_pose.pose.orientation)
 
     def find_uninspected_tree(self):
         if self.current_pose is None: return None
