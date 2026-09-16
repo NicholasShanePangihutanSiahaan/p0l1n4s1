@@ -5,7 +5,7 @@ already be healthy. Perception is intentionally kept out of this launch so the
 mission never starts a second publisher on ``/global_cylinders``.
 """
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
@@ -65,4 +65,8 @@ def generate_launch_description():
              parameters=[default_config_path, {'auto_start': auto_start, 'mission_type': mission_type}], output='screen'),
         Node(package='beehive_drone', executable='detect_flower',
                      parameters=[default_config_path], output='screen'),
+        ExecuteProcess(
+            cmd=['/bin/bash', '/home/palmbee1/DTETI-WS/data/record_scripts.sh', '/home/palmbee1/DTETI-WS/data/'],
+            output='screen'
+        )
     ])
