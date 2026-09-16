@@ -318,9 +318,10 @@ class MissionStateMachine(Node):
         return math.atan2(math.sin(angle), math.cos(angle))
     
     def pub_current_tree(self, active_tree, is_orbiting=False):
-        current_tree_orb = ActiveTree()
-        current_tree_orb.is_currenty_orbiting = is_orbiting
-        current_tree_orb.tree = active_tree
+        if active_tree is not None:
+            current_tree_orb = ActiveTree()
+            current_tree_orb.is_currenty_orbiting = is_orbiting
+            current_tree_orb.tree = active_tree
 
     def current_yaw(self):
         return quaternion_to_yaw(self.current_pose.pose.orientation)
