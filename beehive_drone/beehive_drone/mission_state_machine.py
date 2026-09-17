@@ -9,6 +9,7 @@ from beehive_drone.mission_params import MissionConfig
 from beehive_drone.missions import MISSION_STRATEGIES
 from geometry_msgs.msg import PoseStamped, Point, Pose
 from std_msgs.msg import Bool, String, Float32
+from std_srvs.srv import SetBool
 from uav_interfaces.msg import TreeArray, Tree, ActiveTree
 
 class MissionStateMachine(Node):
@@ -166,6 +167,14 @@ class MissionStateMachine(Node):
         self.tree_sub = self.create_subscription(TreeArray, "/map/trees", self.tree_cb, qos_map)
         self.create_subscription(
             PoseStamped, self.vision_pose_topic, self.vision_pose_cb, qos_sensor)
+#   
+        # ==========================================
+        # Service
+        # ==========================================
+        self.sprayer_service = self.create_client(SetBool, "spray")
+        
+        while not self.sprayer_service.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service sprayer not available, waiting again...')
 
         # Telemetri dari Flight Manager
         self.telemetry_arm_sub = self.create_subscription(Bool, "/flight/telemetry/is_armed", self.arm_cb, 10)
@@ -221,6 +230,14 @@ class MissionStateMachine(Node):
     def tree_cb(self, msg): self.trees = msg.trees
     def alignment_cb(self, msg): self.frame_alignment_ready = bool(msg.data)
     
+    def sprayer_toggle(self, status:bool):
+        req = SetBool.Request()
+        req.data = status
+        future = self.sprayer_service.call_async(req)
+        future.add_done_callback(self._sprayer_response_cb)
+        return self.future.result()
+
+    
     def euler_to_quaternion(self, roll, pitch, yaw):
         qx = math.sin(roll/2) * math.cos(pitch/2) * math.cos(yaw/2) - math.cos(roll/2) * math.sin(pitch/2) * math.sin(yaw/2)
         qy = math.cos(roll/2) * math.sin(pitch/2) * math.cos(yaw/2) + math.sin(roll/2) * math.cos(pitch/2) * math.sin(yaw/2)
@@ -237,6 +254,7 @@ class MissionStateMachine(Node):
     def landing_command_due(self, current_mode, last_command_age, retry_interval):
         """Return whether the LAND request may be sent without flooding MAVROS."""
         return current_mode != 'LAND' and last_command_age >= retry_interval
+    
 
 
     def yaw_aligned(self, current_yaw, target_yaw, tolerance):
@@ -322,6 +340,7 @@ class MissionStateMachine(Node):
             current_tree_orb = ActiveTree()
             current_tree_orb.is_currenty_orbiting = is_orbiting
             current_tree_orb.tree = active_tree
+            self.active_tree_pub.publish(current_tree_orb)
 
     def current_yaw(self):
         return self.quaternion_to_yaw(self.current_pose.pose.orientation)
