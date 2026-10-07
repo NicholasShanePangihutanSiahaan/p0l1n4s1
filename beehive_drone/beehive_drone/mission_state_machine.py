@@ -63,6 +63,7 @@ class MissionStateMachine(Node):
         self.declare_parameter('state_timeout', 120.0)
         self.declare_parameter('pose_timeout', 1.0)
         self.declare_parameter('orbit_radius', 3.0)
+        self.declare_parameter('max_trees', 0)
         self.declare_parameter('post_takeoff_hover_time', 2.0)
         self.declare_parameter('require_vision_before_start', False)
         self.declare_parameter(
@@ -106,6 +107,7 @@ class MissionStateMachine(Node):
         self.require_frame_alignment = bool(
             self.get_parameter('require_frame_alignment').value)
         self.orbit_radius = float(self.get_parameter('orbit_radius').value)
+        self.max_trees = max(0, int(self.get_parameter('max_trees').value))
 
         # ==========================================
         # Variabel State & Navigasi
@@ -132,6 +134,7 @@ class MissionStateMachine(Node):
         self.trees = []
         self.target_tree = None
         self.frozen_target_tree = None
+        self.completed_tree_ids = set()
         self.align_yaw_since = None
         self.first_vision_time = None
         self.last_vision_time = None
@@ -345,6 +348,32 @@ class MissionStateMachine(Node):
     def current_yaw(self):
         return self.quaternion_to_yaw(self.current_pose.pose.orientation)
 
+    def record_completed_tree(self, tree):
+        """Remember a completed tree locally while the mapper update propagates."""
+        self.completed_tree_ids.add(int(tree.id))
+        self.last_tree_x = float(tree.x)
+        self.last_tree_y = float(tree.y)
+
+    def advance_after_tree(self):
+        """Continue exploring, or return home after reaching the tree limit."""
+        self.target_tree = None
+        self.frozen_target_tree = None
+        self.verification_retries = 0
+        self.receiving_flower_pose = False
+        self.done_receiving_flower_pose = False
+        self.flower_pose = None
+
+        completed_count = len(self.completed_tree_ids)
+        if self.max_trees > 0 and completed_count >= self.max_trees:
+            self.transition("ALIGN_HOME")
+            self.get_logger().info(
+                f"Target {self.max_trees} pohon tercapai. Kembali ke home.")
+            return
+
+        self.transition("EXPLORE_ROW")
+        self.get_logger().info(
+            f"Pohon selesai ({completed_count}). Mencari pohon berikutnya.")
+
     def find_uninspected_tree(self):
         if self.current_pose is None: return None
         cx, cy = self.current_pose.pose.position.x, self.current_pose.pose.position.y
@@ -353,7 +382,8 @@ class MissionStateMachine(Node):
         min_dist = float('inf')
 
         for tree in self.trees:
-            if not tree.inspected:
+            if (not tree.inspected and
+                    int(tree.id) not in self.completed_tree_ids):
                 dist = self.distance(cx, cy, tree.x, tree.y)
                 is_ahead = (tree.x - cx) * self.explore_dir_x >= -1.0
                 if is_ahead and dist < min_dist and dist < 15.0: 

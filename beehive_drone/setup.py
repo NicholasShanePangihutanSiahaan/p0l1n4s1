@@ -40,6 +40,7 @@ setup(
             'vision_to_mavros = beehive_drone.vision_to_mavros:main',
             'zed_frame_alignment = beehive_drone.frame_alignment:main',
             'detect_flower = beehive_drone.detect_flower_pose:main',
+            'sim_sprayer = beehive_drone.sim_sprayer:main',
         ],
     },
 )

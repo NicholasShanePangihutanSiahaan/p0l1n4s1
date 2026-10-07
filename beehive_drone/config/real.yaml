@@ -77,6 +77,8 @@ mission_state_machine:
     vision_pose_timeout: 1.0
     vision_warmup_time: 5.0
     orbit_radius: 3.0
+    # 0: inspeksi semua pohon sampai eksplorasi lahan selesai.
+    max_trees: 0
     abort_mode: BRAKE
 
 dynamic_orbit_controller:

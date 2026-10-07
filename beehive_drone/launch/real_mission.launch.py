@@ -10,6 +10,7 @@ from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 import os
 
@@ -21,8 +22,10 @@ def generate_launch_description():
     auto_start = LaunchConfiguration("auto_start")
     analyzer_output_directory = LaunchConfiguration("analyzer_output_directory")
     mission_type = LaunchConfiguration("mission_type")
+    max_trees = LaunchConfiguration("max_trees")
     config_file = LaunchConfiguration("config_file")
     record_data = LaunchConfiguration("record_data")
+    enable_flower_detection = LaunchConfiguration("enable_flower_detection")
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -55,6 +58,22 @@ def generate_launch_description():
                 description=(
                     "Strategi misi yang akan dijalankan (misal: basic_orbit). "
                     "Terdaftar di beehive_drone.missions.MISSION_STRATEGIES."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "enable_flower_detection",
+                default_value="true",
+                description=(
+                    "Jalankan detect_flower; dapat dimatikan untuk simulasi "
+                    "pohon tanpa objek bunga sintetis."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "max_trees",
+                default_value="0",
+                description=(
+                    "Batas pohon yang diproses; 0 berarti lanjut sampai "
+                    "eksplorasi selesai."
                 ),
             ),
             # /global_cylinders berasal dari bb_pcl_proc_node yang dijalankan
@@ -109,13 +128,22 @@ def generate_launch_description():
                 executable="mission_state_machine",
                 parameters=[
                     config_file,
-                    {"auto_start": auto_start, "mission_type": mission_type},
+                    {
+                        "auto_start": ParameterValue(
+                            auto_start, value_type=bool
+                        ),
+                        "mission_type": mission_type,
+                        "max_trees": ParameterValue(
+                            max_trees, value_type=int
+                        ),
+                    },
                 ],
                 output="screen",
             ),
             Node(
                 package="beehive_drone",
                 executable="detect_flower",
+                condition=IfCondition(enable_flower_detection),
                 parameters=[config_file],
                 output="screen",
             ),
