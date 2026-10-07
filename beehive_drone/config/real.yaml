@@ -53,6 +53,8 @@ tree_mapper:
 
 mission_state_machine:
   ros__parameters:
+    # Default aman/kompatibel dengan penerbangan satu pohon yang telah diuji.
+    mission_mode: single_tree
     flight_altitude: 1.9
     # Jarak horizontal titik approach terhadap pusat batang.
     approach_distance: 2.6
@@ -77,7 +79,7 @@ mission_state_machine:
     vision_pose_timeout: 1.0
     vision_warmup_time: 5.0
     orbit_radius: 3.0
-    # 0: inspeksi semua pohon sampai eksplorasi lahan selesai.
+    # Hanya dipakai dalam multi_tree; 0: tanpa batas jumlah pohon.
     max_trees: 0
     abort_mode: BRAKE
 

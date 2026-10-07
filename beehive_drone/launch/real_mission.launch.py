@@ -22,6 +22,7 @@ def generate_launch_description():
     auto_start = LaunchConfiguration("auto_start")
     analyzer_output_directory = LaunchConfiguration("analyzer_output_directory")
     mission_type = LaunchConfiguration("mission_type")
+    mission_mode = LaunchConfiguration("mission_mode")
     max_trees = LaunchConfiguration("max_trees")
     config_file = LaunchConfiguration("config_file")
     record_data = LaunchConfiguration("record_data")
@@ -58,6 +59,15 @@ def generate_launch_description():
                 description=(
                     "Strategi misi yang akan dijalankan (misal: basic_orbit). "
                     "Terdaftar di beehive_drone.missions.MISSION_STRATEGIES."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "mission_mode",
+                default_value="single_tree",
+                choices=["single_tree", "multi_tree"],
+                description=(
+                    "single_tree: satu pohon lalu pulang; multi_tree: lanjut "
+                    "memilih pohon berikutnya sampai max_trees tercapai."
                 ),
             ),
             DeclareLaunchArgument(
@@ -133,6 +143,7 @@ def generate_launch_description():
                             auto_start, value_type=bool
                         ),
                         "mission_type": mission_type,
+                        "mission_mode": mission_mode,
                         "max_trees": ParameterValue(
                             max_trees, value_type=int
                         ),

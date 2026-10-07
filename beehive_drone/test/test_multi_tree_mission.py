@@ -10,8 +10,9 @@ class LoggerStub:
         pass
 
 
-def make_fsm(max_trees=0):
+def make_fsm(max_trees=0, mission_mode='multi_tree'):
     fsm = SimpleNamespace(
+        mission_mode=mission_mode,
         max_trees=max_trees,
         completed_tree_ids=set(),
         target_tree=object(),
@@ -58,6 +59,15 @@ def test_unlimited_mission_continues_to_explore_and_resets_tree_state():
 def test_tree_limit_returns_home():
     fsm = make_fsm(max_trees=2)
     fsm.completed_tree_ids = {1, 2}
+
+    MissionStateMachine.advance_after_tree(fsm)
+
+    assert fsm.state == 'ALIGN_HOME'
+
+
+def test_single_tree_returns_home_after_first_tree_even_without_limit():
+    fsm = make_fsm(max_trees=0, mission_mode='single_tree')
+    fsm.completed_tree_ids = {1}
 
     MissionStateMachine.advance_after_tree(fsm)
 

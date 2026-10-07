@@ -62,6 +62,7 @@ class MissionStateMachine(Node):
         self.declare_parameter('auto_start', True)
         self.declare_parameter('state_timeout', 120.0)
         self.declare_parameter('pose_timeout', 1.0)
+        self.declare_parameter('mission_mode', 'single_tree')
         self.declare_parameter('orbit_radius', 3.0)
         self.declare_parameter('max_trees', 0)
         self.declare_parameter('post_takeoff_hover_time', 2.0)
@@ -87,6 +88,11 @@ class MissionStateMachine(Node):
         self.auto_start = bool(self.get_parameter('auto_start').value)
         self.state_timeout = float(self.get_parameter('state_timeout').value)
         self.pose_timeout = float(self.get_parameter('pose_timeout').value)
+        self.mission_mode = str(
+            self.get_parameter('mission_mode').value).strip().lower()
+        if self.mission_mode not in ('single_tree', 'multi_tree'):
+            raise ValueError(
+                "mission_mode harus 'single_tree' atau 'multi_tree'")
         self.post_takeoff_hover_time = float(
             self.get_parameter('post_takeoff_hover_time').value)
         self.require_vision_before_start = bool(
@@ -364,10 +370,19 @@ class MissionStateMachine(Node):
         self.flower_pose = None
 
         completed_count = len(self.completed_tree_ids)
-        if self.max_trees > 0 and completed_count >= self.max_trees:
+        single_tree_done = (
+            self.mission_mode == 'single_tree' and completed_count >= 1)
+        tree_limit_reached = (
+            self.mission_mode == 'multi_tree' and
+            self.max_trees > 0 and completed_count >= self.max_trees)
+        if single_tree_done or tree_limit_reached:
             self.transition("ALIGN_HOME")
-            self.get_logger().info(
-                f"Target {self.max_trees} pohon tercapai. Kembali ke home.")
+            if single_tree_done:
+                self.get_logger().info(
+                    "Mode single_tree selesai. Kembali ke home.")
+            else:
+                self.get_logger().info(
+                    f"Target {self.max_trees} pohon tercapai. Kembali ke home.")
             return
 
         self.transition("EXPLORE_ROW")

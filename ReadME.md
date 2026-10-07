@@ -80,8 +80,26 @@ Terminal 5 — mapper, controller, safety monitor, analyzer, dan FSM:
 ```bash
 source /opt/ros/humble/setup.bash
 source ~/polinasi/install/setup.bash
-ros2 launch beehive_drone real_mission.launch.py auto_start:=false
+ros2 launch beehive_drone real_mission.launch.py \
+  auto_start:=false \
+  mission_type:=basic_orbit \
+  mission_mode:=single_tree
 ```
+
+Untuk multi-tree dengan batas dua pohon:
+
+```bash
+ros2 launch beehive_drone real_mission.launch.py \
+  auto_start:=false \
+  mission_type:=basic_orbit \
+  mission_mode:=multi_tree \
+  max_trees:=2
+```
+
+`mission_type` memilih strategi penerbangan/spraying, sedangkan
+`mission_mode` memilih apakah strategi tersebut berhenti setelah satu pohon
+atau melanjutkan ke pohon berikutnya. `max_trees` hanya berlaku pada
+`multi_tree`; nilai `0` berarti tanpa batas jumlah pohon.
 
 ## Gate sebelum start
 
