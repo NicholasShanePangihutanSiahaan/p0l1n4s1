@@ -177,7 +177,8 @@ class BasicOrbitMission(BaseMissionStrategy):
                         update_msg.inspected = target_matched_tree.inspected
                         update_msg.validated = True
                         update_msg.orbit_count = target_matched_tree.orbit_count
-                        fsm.tree_update_pub.publish(update_msg)
+                        if not fsm.is_virtual_tree(target_matched_tree):
+                            fsm.tree_update_pub.publish(update_msg)
                         fsm.transition("START_ORBIT")
                         fsm.get_logger().info(f"Verifikasi sukses! Pohon ID:{target_matched_tree.id} valid. Memulai orbit.")
                     else:
@@ -237,7 +238,8 @@ class BasicOrbitMission(BaseMissionStrategy):
                     update_msg.inspected = True 
                     update_msg.validated = True
                     update_msg.orbit_count = min(255, int(fsm.target_tree.orbit_count) + 1)
-                    fsm.tree_update_pub.publish(update_msg)
+                    if not fsm.is_virtual_tree(fsm.target_tree):
+                        fsm.tree_update_pub.publish(update_msg)
                     fsm.record_completed_tree(fsm.target_tree)
                     fsm.get_logger().info(f"Pohon ID:{fsm.target_tree.id} ditandai SELESAI.")
 

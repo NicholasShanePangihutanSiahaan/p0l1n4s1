@@ -101,6 +101,29 @@ ros2 launch beehive_drone real_mission.launch.py \
 atau melanjutkan ke pohon berikutnya. `max_trees` hanya berlaku pada
 `multi_tree`; nilai `0` berarti tanpa batas jumlah pohon.
 
+Untuk menguji satu pohon hasil deteksi lalu satu target virtual dengan
+koordinat relatif terhadap home:
+
+```bash
+ros2 launch beehive_drone real_mission.launch.py \
+  auto_start:=false \
+  mission_type:=virtual_tree_test \
+  mission_mode:=multi_tree \
+  max_trees:=2 \
+  enable_flower_detection:=false \
+  require_tree_ahead:=false \
+  virtual_tree_position_mode:=home_relative \
+  virtual_tree_position_x:=6.0 \
+  virtual_tree_position_y:=3.0
+```
+
+`home_relative` menghitung pusat virtual sebagai
+`(home_x + position_x, home_y + position_y)`. Alternatifnya,
+`virtual_tree_position_mode:=map` menggunakan X/Y absolut pada local map,
+sedangkan `toward_home` menggunakan `virtual_tree_offset_toward_home` sebagai
+jarak dari pohon pertama menuju home. Target virtual hanya hidup di dalam FSM;
+target tersebut tidak dipublikasikan sebagai hasil AI ke tree mapper.
+
 ## Gate sebelum start
 
 Lakukan pemeriksaan pertama tanpa propeller:

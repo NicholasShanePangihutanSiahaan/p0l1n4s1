@@ -81,6 +81,13 @@ mission_state_machine:
     orbit_radius: 3.0
     # Hanya dipakai dalam multi_tree; 0: tanpa batas jumlah pohon.
     max_trees: 0
+    # Hanya aktif ketika mission_type=virtual_tree_test.
+    require_tree_ahead: true
+    virtual_tree_position_mode: home_relative
+    virtual_tree_position_x: 6.0
+    virtual_tree_position_y: 3.0
+    virtual_tree_offset_toward_home: 6.0
+    virtual_tree_id: 9001
     abort_mode: BRAKE
 
 dynamic_orbit_controller:

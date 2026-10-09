@@ -65,6 +65,12 @@ class MissionStateMachine(Node):
         self.declare_parameter('mission_mode', 'single_tree')
         self.declare_parameter('orbit_radius', 3.0)
         self.declare_parameter('max_trees', 0)
+        self.declare_parameter('require_tree_ahead', True)
+        self.declare_parameter('virtual_tree_position_mode', 'home_relative')
+        self.declare_parameter('virtual_tree_position_x', 6.0)
+        self.declare_parameter('virtual_tree_position_y', 3.0)
+        self.declare_parameter('virtual_tree_offset_toward_home', 6.0)
+        self.declare_parameter('virtual_tree_id', 9001)
         self.declare_parameter('post_takeoff_hover_time', 2.0)
         self.declare_parameter('require_vision_before_start', False)
         self.declare_parameter(
@@ -114,6 +120,23 @@ class MissionStateMachine(Node):
             self.get_parameter('require_frame_alignment').value)
         self.orbit_radius = float(self.get_parameter('orbit_radius').value)
         self.max_trees = max(0, int(self.get_parameter('max_trees').value))
+        self.require_tree_ahead = bool(
+            self.get_parameter('require_tree_ahead').value)
+        self.virtual_tree_position_mode = str(self.get_parameter(
+            'virtual_tree_position_mode').value).strip().lower()
+        if self.virtual_tree_position_mode not in (
+                'toward_home', 'home_relative', 'map'):
+            raise ValueError(
+                'virtual_tree_position_mode harus toward_home, '
+                'home_relative, atau map')
+        self.virtual_tree_position_x = float(self.get_parameter(
+            'virtual_tree_position_x').value)
+        self.virtual_tree_position_y = float(self.get_parameter(
+            'virtual_tree_position_y').value)
+        self.virtual_tree_offset_toward_home = max(0.1, float(
+            self.get_parameter('virtual_tree_offset_toward_home').value))
+        self.virtual_tree_id = int(
+            self.get_parameter('virtual_tree_id').value)
 
         # ==========================================
         # Variabel State & Navigasi
@@ -236,7 +259,12 @@ class MissionStateMachine(Node):
                 self.quaternion_to_yaw(msg.pose.orientation)
             )
     def orbit_status_cb(self, msg): self.orbit_status = msg.data
-    def tree_cb(self, msg): self.trees = msg.trees
+    def tree_cb(self, msg):
+        trees = list(msg.trees)
+        decorate = getattr(self.mission_strategy, 'decorate_tree_map', None)
+        if decorate is not None:
+            trees = decorate(trees)
+        self.trees = trees
     def alignment_cb(self, msg): self.frame_alignment_ready = bool(msg.data)
     
     def sprayer_toggle(self, status:bool):
@@ -359,6 +387,23 @@ class MissionStateMachine(Node):
         self.completed_tree_ids.add(int(tree.id))
         self.last_tree_x = float(tree.x)
         self.last_tree_y = float(tree.y)
+        strategy = getattr(self, 'mission_strategy', None)
+        completed_hook = getattr(strategy, 'tree_completed', None)
+        if completed_hook is not None:
+            virtual = completed_hook(tree, self)
+            if virtual is not None:
+                decorate = getattr(
+                    self.mission_strategy, 'decorate_tree_map', None)
+                self.trees = decorate(self.trees)
+                self.get_logger().warning(
+                    'VIRTUAL TREE TEST aktif: pusat='
+                    f'({virtual.x:.2f}, {virtual.y:.2f}), '
+                    'target kedua bukan hasil AI.')
+
+    def is_virtual_tree(self, tree):
+        strategy = getattr(self, 'mission_strategy', None)
+        check = getattr(strategy, 'is_virtual', None)
+        return bool(check is not None and check(tree, self))
 
     def advance_after_tree(self):
         """Continue exploring, or return home after reaching the tree limit."""
@@ -400,8 +445,13 @@ class MissionStateMachine(Node):
             if (not tree.inspected and
                     int(tree.id) not in self.completed_tree_ids):
                 dist = self.distance(cx, cy, tree.x, tree.y)
-                is_ahead = (tree.x - cx) * self.explore_dir_x >= -1.0
-                if is_ahead and dist < min_dist and dist < 15.0: 
+                is_virtual = MissionStateMachine.is_virtual_tree(self, tree)
+                require_tree_ahead = getattr(
+                    self, 'require_tree_ahead', True)
+                is_ahead = is_virtual or not require_tree_ahead or \
+                    (tree.x - cx) * self.explore_dir_x >= -1.0
+                within_range = is_virtual or dist < 15.0
+                if is_ahead and within_range and dist < min_dist:
                     min_dist = dist
                     best_tree = tree
         return best_tree

@@ -24,6 +24,7 @@ def generate_launch_description():
     mission_type = LaunchConfiguration("mission_type")
     mission_mode = LaunchConfiguration("mission_mode")
     max_trees = LaunchConfiguration("max_trees")
+    require_tree_ahead = LaunchConfiguration("require_tree_ahead")
     config_file = LaunchConfiguration("config_file")
     record_data = LaunchConfiguration("record_data")
     enable_flower_detection = LaunchConfiguration("enable_flower_detection")
@@ -86,6 +87,19 @@ def generate_launch_description():
                     "eksplorasi selesai."
                 ),
             ),
+            DeclareLaunchArgument(
+                "require_tree_ahead", default_value="true",
+                description="Filter pohon nyata ke arah eksplorasi; target virtual selalu dikecualikan.",
+            ),
+            DeclareLaunchArgument(
+                "virtual_tree_position_mode", default_value="home_relative",
+                choices=["toward_home", "home_relative", "map"],
+            ),
+            DeclareLaunchArgument("virtual_tree_position_x", default_value="6.0"),
+            DeclareLaunchArgument("virtual_tree_position_y", default_value="3.0"),
+            DeclareLaunchArgument(
+                "virtual_tree_offset_toward_home", default_value="6.0"),
+            DeclareLaunchArgument("virtual_tree_id", default_value="9001"),
             # /global_cylinders berasal dari bb_pcl_proc_node yang dijalankan
             # terpisah setelah ZED object detection sehat.
             Node(
@@ -146,6 +160,29 @@ def generate_launch_description():
                         "mission_mode": mission_mode,
                         "max_trees": ParameterValue(
                             max_trees, value_type=int
+                        ),
+                        "require_tree_ahead": ParameterValue(
+                            require_tree_ahead, value_type=bool
+                        ),
+                        "virtual_tree_position_mode": LaunchConfiguration(
+                            "virtual_tree_position_mode"
+                        ),
+                        "virtual_tree_position_x": ParameterValue(
+                            LaunchConfiguration("virtual_tree_position_x"),
+                            value_type=float,
+                        ),
+                        "virtual_tree_position_y": ParameterValue(
+                            LaunchConfiguration("virtual_tree_position_y"),
+                            value_type=float,
+                        ),
+                        "virtual_tree_offset_toward_home": ParameterValue(
+                            LaunchConfiguration(
+                                "virtual_tree_offset_toward_home"
+                            ), value_type=float,
+                        ),
+                        "virtual_tree_id": ParameterValue(
+                            LaunchConfiguration("virtual_tree_id"),
+                            value_type=int,
                         ),
                     },
                 ],
