@@ -58,6 +58,8 @@ tree_mapper:
 
 mission_state_machine:
   ros__parameters:
+    # Default aman/kompatibel dengan penerbangan satu pohon yang telah diuji.
+    mission_mode: single_tree
     # Jarak horizontal titik approach terhadap pusat batang.
     approach_distance: 2.6
     tree_distance_tolerance: 0.5
@@ -80,6 +82,8 @@ mission_state_machine:
     vision_pose_topic: /mavros/vision_pose/pose
     vision_pose_timeout: 1.0
     vision_warmup_time: 5.0
+    # Hanya dipakai dalam multi_tree; 0: tanpa batas jumlah pohon.
+    max_trees: 0
     abort_mode: BRAKE
 
 dynamic_orbit_controller:

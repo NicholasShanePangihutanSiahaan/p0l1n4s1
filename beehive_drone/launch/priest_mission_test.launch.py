@@ -26,6 +26,7 @@ def generate_launch_description():
     max_trees = LaunchConfiguration("max_trees")
     config_file = LaunchConfiguration("config_file")
     record_data = LaunchConfiguration("record_data")
+    priest_delay = LaunchConfiguration("priest_delay")
 
     enable_flower_detection = LaunchConfiguration("enable_flower_detection")
     return LaunchDescription(
@@ -95,86 +96,102 @@ def generate_launch_description():
             # /global_cylinders berasal dari bb_pcl_proc_node yang dijalankan
             # terpisah setelah ZED object detection sehat.
             Node(
-                package="beehive_drone",
-                executable="tree_mapper",
+                package="priest_dyn_traj",
+                executable="priest_dyn_node",
+                name="priest_dyn_node",
                 parameters=[config_file],
                 output="screen",
+                emulate_tty=True,
             ),
-            Node(
-                package="beehive_drone",
-                executable="vortex_avoidance_controller",
-                output="screen",
-            ),
-            Node(
-                package="beehive_drone",
-                executable="dynamic_orbit_controller",
-                parameters=[config_file],
-                output="screen",
-            ),
-            Node(
-                package="beehive_drone",
-                executable="position_setpoint_controller",
-                parameters=[config_file],
-                output="screen",
-            ),
-            Node(
-                package="beehive_drone",
-                executable="flight_manager",
-                parameters=[config_file],
-                output="screen",
-            ),
-            Node(
-                package="beehive_drone",
-                executable="mission_safety_monitor",
-                parameters=[config_file],
-                output="screen",
-            ),
-            Node(
-                package="beehive_drone",
-                executable="mission_analyzer",
-                condition=IfCondition(record_data),
-                parameters=[
-                    config_file,
-                    {"output_directory": analyzer_output_directory},
-                ],
-                output="screen",
-            ),
-            Node(
-                package="beehive_drone",
-                executable="mission_state_machine",
-                parameters=[
-                    config_file,
-                    {"auto_start": auto_start, "mission_type": mission_type},
-                ],
-                output="screen",
-            ),
-            Node(
-                package="beehive_drone",
-                executable="detect_flower",
-                condition=IfCondition(enable_flower_detection),
-                parameters=[config_file],
-                output="screen",
-            ),
-            ExecuteProcess(
-                cmd=[
-                    "/bin/bash",
-                    "/home/palmbee1/DTETI-WS/data/record_scripts.sh",
-                    "/home/palmbee1/DTETI-WS/data/",
-                ],
-                output="screen",
-                condition=IfCondition(record_data),
-            ),
-            Node(
-                package="beehive_drone",
-                executable="mission_state_machine",
-                parameters=[
-                    config_file,
-                    {
-                        "auto_start": ParameterValue(auto_start, value_type=bool),
-                        "mission_type": mission_type,
-                        "mission_mode": mission_mode,
-                        "max_trees": ParameterValue(max_trees, value_type=int),
-                    },
+            TimerAction(
+                period=priest_delay,
+                actions=[
+                    Node(
+                        package="beehive_drone",
+                        executable="tree_mapper",
+                        parameters=[config_file],
+                        output="screen",
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="vortex_avoidance_controller",
+                        output="screen",
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="dynamic_orbit_controller",
+                        parameters=[config_file],
+                        output="screen",
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="position_setpoint_controller",
+                        parameters=[config_file],
+                        output="screen",
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="flight_manager",
+                        parameters=[config_file],
+                        output="screen",
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="mission_safety_monitor",
+                        parameters=[config_file],
+                        output="screen",
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="mission_analyzer",
+                        condition=IfCondition(record_data),
+                        parameters=[
+                            config_file,
+                            {"output_directory": analyzer_output_directory},
+                        ],
+                        output="screen",
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="mission_state_machine",
+                        parameters=[
+                            config_file,
+                            {"auto_start": auto_start, "mission_type": mission_type},
+                        ],
+                        output="screen",
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="detect_flower",
+                        condition=IfCondition(enable_flower_detection),
+                        parameters=[config_file],
+                        output="screen",
+                    ),
+                    ExecuteProcess(
+                        cmd=[
+                            "/bin/bash",
+                            "/home/palmbee1/DTETI-WS/data/record_scripts.sh",
+                            "/home/palmbee1/DTETI-WS/data/",
+                        ],
+                        output="screen",
+                        condition=IfCondition(record_data),
+                    ),
+                    Node(
+                        package="beehive_drone",
+                        executable="mission_state_machine",
+                        parameters=[
+                            config_file,
+                            {
+                                "auto_start": ParameterValue(
+                                    auto_start, value_type=bool
+                                ),
+                                "mission_type": mission_type,
+                                "mission_mode": mission_mode,
+                                "max_trees": ParameterValue(max_trees, value_type=int),
+                            },
+                        ],
+                        output="screen",
+                    ),
                 ],
                 output="screen",
             ),

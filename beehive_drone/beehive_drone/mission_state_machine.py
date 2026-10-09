@@ -62,7 +62,9 @@ class MissionStateMachine(Node):
         self.declare_parameter('auto_start', True)
         self.declare_parameter('state_timeout', 120.0)
         self.declare_parameter('pose_timeout', 1.0)
+        self.declare_parameter('mission_mode', 'single_tree')
         self.declare_parameter('orbit_radius', 3.0)
+        self.declare_parameter('max_trees', 0)
         self.declare_parameter('post_takeoff_hover_time', 2.0)
         self.declare_parameter('require_vision_before_start', False)
         self.declare_parameter(
@@ -86,6 +88,11 @@ class MissionStateMachine(Node):
         self.auto_start = bool(self.get_parameter('auto_start').value)
         self.state_timeout = float(self.get_parameter('state_timeout').value)
         self.pose_timeout = float(self.get_parameter('pose_timeout').value)
+        self.mission_mode = str(
+            self.get_parameter('mission_mode').value).strip().lower()
+        if self.mission_mode not in ('single_tree', 'multi_tree'):
+            raise ValueError(
+                "mission_mode harus 'single_tree' atau 'multi_tree'")
         self.post_takeoff_hover_time = float(
             self.get_parameter('post_takeoff_hover_time').value)
         self.require_vision_before_start = bool(
@@ -106,6 +113,7 @@ class MissionStateMachine(Node):
         self.require_frame_alignment = bool(
             self.get_parameter('require_frame_alignment').value)
         self.orbit_radius = float(self.get_parameter('orbit_radius').value)
+        self.max_trees = max(0, int(self.get_parameter('max_trees').value))
 
         # ==========================================
         # Variabel State & Navigasi
@@ -132,6 +140,7 @@ class MissionStateMachine(Node):
         self.trees = []
         self.target_tree = None
         self.frozen_target_tree = None
+        self.completed_tree_ids = set()
         self.align_yaw_since = None
         self.first_vision_time = None
         self.last_vision_time = None
@@ -345,6 +354,41 @@ class MissionStateMachine(Node):
     def current_yaw(self):
         return self.quaternion_to_yaw(self.current_pose.pose.orientation)
 
+    def record_completed_tree(self, tree):
+        """Remember a completed tree locally while the mapper update propagates."""
+        self.completed_tree_ids.add(int(tree.id))
+        self.last_tree_x = float(tree.x)
+        self.last_tree_y = float(tree.y)
+
+    def advance_after_tree(self):
+        """Continue exploring, or return home after reaching the tree limit."""
+        self.target_tree = None
+        self.frozen_target_tree = None
+        self.verification_retries = 0
+        self.receiving_flower_pose = False
+        self.done_receiving_flower_pose = False
+        self.flower_pose = None
+
+        completed_count = len(self.completed_tree_ids)
+        single_tree_done = (
+            self.mission_mode == 'single_tree' and completed_count >= 1)
+        tree_limit_reached = (
+            self.mission_mode == 'multi_tree' and
+            self.max_trees > 0 and completed_count >= self.max_trees)
+        if single_tree_done or tree_limit_reached:
+            self.transition("ALIGN_HOME")
+            if single_tree_done:
+                self.get_logger().info(
+                    "Mode single_tree selesai. Kembali ke home.")
+            else:
+                self.get_logger().info(
+                    f"Target {self.max_trees} pohon tercapai. Kembali ke home.")
+            return
+
+        self.transition("EXPLORE_ROW")
+        self.get_logger().info(
+            f"Pohon selesai ({completed_count}). Mencari pohon berikutnya.")
+
     def find_uninspected_tree(self):
         if self.current_pose is None: return None
         cx, cy = self.current_pose.pose.position.x, self.current_pose.pose.position.y
@@ -353,7 +397,8 @@ class MissionStateMachine(Node):
         min_dist = float('inf')
 
         for tree in self.trees:
-            if not tree.inspected:
+            if (not tree.inspected and
+                    int(tree.id) not in self.completed_tree_ids):
                 dist = self.distance(cx, cy, tree.x, tree.y)
                 is_ahead = (tree.x - cx) * self.explore_dir_x >= -1.0
                 if is_ahead and dist < min_dist and dist < 15.0: 

@@ -209,6 +209,8 @@ class ManualSprayMission(BaseMissionStrategy):
                     fsm.transition("EXPLORE_ROW")
 
         elif fsm.state == "START_ORBIT":
+            # Jangan gunakan kembali status terminal orbit pohon sebelumnya.
+            fsm.orbit_status = "IDLE"
             target_msg = Point()
             target_msg.x = fsm.target_tree.x
             target_msg.y = fsm.target_tree.y
@@ -238,6 +240,7 @@ class ManualSprayMission(BaseMissionStrategy):
                     update_msg.validated = True
                     update_msg.orbit_count = min(255, int(fsm.target_tree.orbit_count) + 1)
                     fsm.tree_update_pub.publish(update_msg)
+                    fsm.record_completed_tree(fsm.target_tree)
                     fsm.get_logger().info(f"Pohon ID:{fsm.target_tree.id} ditandai SELESAI.")
 
                 fsm.hold_x = cx
@@ -296,8 +299,7 @@ class ManualSprayMission(BaseMissionStrategy):
             required_ticks = int(MissionConfig.POST_ORBIT_HOVER_TIME / 0.1)
             if fsm.hover_timer >= required_ticks:
                 fsm.hover_timer = 0
-                fsm.transition("ALIGN_HOME")
-                fsm.get_logger().info("Hover stabil. Menyesuaikan yaw menuju home.")
+                fsm.advance_after_tree()
 
         elif fsm.state == "ALIGN_HOME":
             fsm.done_receiving_flower_pose = False
