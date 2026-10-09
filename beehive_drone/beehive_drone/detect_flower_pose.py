@@ -85,7 +85,7 @@ class DetectFlowerNode(Node):
             self.flower_pose.position.x = flower.x
             self.flower_pose.position.y = flower.y
             self.flower_pose.position.z = flower.z
-            self.flower_pub(self.flower_pose)
+            self.flower_pub.publish(self.flower_pose)
             self.get_logger().info("Berhasil deteksi sebuah bunga!", throttle_duration_sec=0.5)
             pass
           else:

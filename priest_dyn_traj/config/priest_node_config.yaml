@@ -1,0 +1,40 @@
+priest_dyn_node:
+  ros__parameters:
+    plan_rate_hz: 7.0
+    goal_tolerance: 0.15
+    horizon_seconds: 10.0
+
+    num_samples: 100
+    num_batch: 110
+    max_obstacles: 60
+    reference_samples: 300
+    cem_iterations: 13
+
+    v_max: 0.90
+    v_min: 0.0
+    a_max: 1.30
+    v_des: 0.55
+    weight_smoothness: 1.0
+    weight_track: 0.001
+    robot_radius: 0.25
+    safety_margin: 0.10
+    goal_clearance: 0.08
+    goal_lateral_weight: 0.0
+
+    odom_timeout: 1.0
+    obstacle_timeout: 2.0
+    max_solve_age: 30.0
+    max_start_drift: 0.50
+    require_obstacles: True
+    device: 'cpu'
+    seed: 0
+
+    is_log_CEM_progress: True # Log atau tidak
+
+    # Nilai ini mempengaruhi apakah PRIEST memakai /navigation/priest/trajectory/in
+    # atau /navigation/priest/linear_goal
+    # Jika fsm_state berada pada 'reference_trajectory_states' maka dia akan memakai /navigation/priest/trajectory/in
+    # sebagai goal trajectory
+    reference_trajectory_states:
+      - 'WAIT_ORBIT'
+      

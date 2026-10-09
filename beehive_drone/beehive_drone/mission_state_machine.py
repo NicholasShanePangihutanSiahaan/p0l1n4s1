@@ -173,8 +173,8 @@ class MissionStateMachine(Node):
         # ==========================================
         self.sprayer_service = self.create_client(SetBool, "spray")
         
-        while not self.sprayer_service.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('service sprayer not available, waiting again...')
+        # while not self.sprayer_service.wait_for_service(timeout_sec=1.0):
+        #     self.get_logger().info('service sprayer not available, waiting again...')
 
         # Telemetri dari Flight Manager
         self.telemetry_arm_sub = self.create_subscription(Bool, "/flight/telemetry/is_armed", self.arm_cb, 10)

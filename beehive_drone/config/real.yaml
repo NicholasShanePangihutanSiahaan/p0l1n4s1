@@ -1,3 +1,8 @@
+/**:
+  ros__parameters:
+    orbit_radius: 2.7
+    flight_altitude: 1.9
+
 pcl_proc_node:
   ros__parameters:
     # Dipertahankan untuk replay/legacy pcl_proc_node. Pada penerbangan real,
@@ -53,7 +58,6 @@ tree_mapper:
 
 mission_state_machine:
   ros__parameters:
-    flight_altitude: 1.9
     # Jarak horizontal titik approach terhadap pusat batang.
     approach_distance: 2.6
     tree_distance_tolerance: 0.5
@@ -76,12 +80,10 @@ mission_state_machine:
     vision_pose_topic: /mavros/vision_pose/pose
     vision_pose_timeout: 1.0
     vision_warmup_time: 5.0
-    orbit_radius: 3.0
     abort_mode: BRAKE
 
 dynamic_orbit_controller:
   ros__parameters:
-    orbit_radius: 2.6
     orbit_altitude: 1.9
     orbit_velocity: 0.55
     orbit_timeout: 180.0
@@ -151,3 +153,40 @@ mission_analyzer:
     expected_takeoff_altitude: 1.5
     expected_approach_distance: 1.5
     expected_orbit_radius: 1.5
+
+priest_dyn_node:
+  ros__parameters:
+    plan_rate_hz: 7.0
+    goal_tolerance: 0.15
+    horizon_seconds: 10.0
+
+    num_samples: 100
+    num_batch: 110
+    max_obstacles: 60
+    reference_samples: 300
+    cem_iterations: 13
+
+    v_max: 0.90
+    v_min: 0.0
+    a_max: 1.30
+    v_des: 0.55
+    weight_smoothness: 1.0
+    weight_track: 0.001
+    robot_radius: 0.25
+    safety_margin: 0.10
+    goal_clearance: 0.08
+    goal_lateral_weight: 0.0
+
+    odom_timeout: 1.0
+    obstacle_timeout: 2.0
+    max_solve_age: 30.0
+    max_start_drift: 0.50
+    require_obstacles: True
+    device: 'cpu'
+    seed: 0
+
+    is_log_CEM_progress: True
+
+    reference_trajectory_states:
+      - "WAIT_ORBIT"
+      
