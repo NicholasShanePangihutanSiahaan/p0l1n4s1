@@ -22,6 +22,13 @@ def generate_launch_description():
     arguments = [
         DeclareLaunchArgument('auto_start', default_value='false'),
         DeclareLaunchArgument('mission_type', default_value='basic_orbit'),
+        DeclareLaunchArgument('mission_mode', default_value='multi_tree'),
+        DeclareLaunchArgument('use_priest', default_value='true'),
+        DeclareLaunchArgument(
+            'altitude_source', default_value='rangefinder',
+            description=(
+                'Sumber altitude flight_manager. Baseline simulasi cbeea78 '
+                'memakai rangefinder dengan kompensasi origin sensor.')),
         DeclareLaunchArgument('max_trees', default_value='2'),
         DeclareLaunchArgument(
             'tree_positions',
@@ -66,6 +73,9 @@ def generate_launch_description():
             'input_topic': '/range',
             'output_topic': '/mavros/rangefinder/rangefinder',
             'frame_id': 'range_link',
+            # Pertahankan kalibrasi simulasi cbeea78 yang sudah berhasil:
+            # origin lidar/model membuat pembacaan sekitar 0.30 m lebih rendah.
+            'measurement_offset': 0.30,
         }])
 
     validator = Node(
@@ -89,20 +99,25 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(os.path.join(
                 beehive_share, 'launch', 'vision_to_mavros.launch.py')),
             launch_arguments={
-                'use_fixed_yaw_offset': 'true',
-                'fixed_yaw_offset_degrees': '0.0',
+                'use_alignment': 'false',
+                'raw_input_topic': '/zed/zed_node/pose',
             }.items()),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(
                 pcl_share, 'launch', 'bb_proc_node.launch.py')),
-            launch_arguments={'pose_topic': '/zed/aligned_pose'}.items()),
+            launch_arguments={'pose_topic': '/zed/zed_node/pose'}.items()),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(
                 beehive_share, 'launch', 'real_mission.launch.py')),
             launch_arguments={
                 'auto_start': LaunchConfiguration('auto_start'),
                 'mission_type': LaunchConfiguration('mission_type'),
+                'mission_mode': LaunchConfiguration('mission_mode'),
                 'max_trees': LaunchConfiguration('max_trees'),
+                'use_priest': LaunchConfiguration('use_priest'),
+                # Pertahankan gate takeoff cbeea78; bridge simulasi memberi
+                # kompensasi +0.30 m sehingga tidak mengubah konfigurasi real.
+                'altitude_source': LaunchConfiguration('altitude_source'),
                 'enable_flower_detection': 'false',
                 'record_data': 'false',
                 'analyzer_output_directory':

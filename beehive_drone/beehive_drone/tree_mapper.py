@@ -138,8 +138,10 @@ class TreeMapper(Node):
     def pcl_cylinders_callback(self, msg):
         """Masukkan cylinder PCL yang sedang terlihat ke database pohon."""
         for tracked in msg.cylinders:
-            if tracked.type != self.label_pohon:
-                continue
+            # bb_pcl_proc_node sudah melakukan exact label filtering sebelum
+            # menerbitkan TrackedCylinderArray. Message TrackedCylinder tidak
+            # memiliki field ``type``; membaca field itu mematikan mapper saat
+            # deteksi pertama tiba.
             cylinder = tracked.cylinder
             if not cylinder.is_valid or tracked.missed_count != 0:
                 continue

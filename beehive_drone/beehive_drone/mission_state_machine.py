@@ -31,7 +31,10 @@ class MissionStateMachine(Node):
         # Strategy Registry Lookup
         # ==========================================
         self.declare_parameter('mission_type', 'flower_mission')
-        mission_type = str(self.get_parameter('mission_type').value)
+        self.declare_parameter('runtime_mission_type', '')
+        mission_type = str(
+            self.get_parameter('runtime_mission_type').value).strip() or str(
+                self.get_parameter('mission_type').value)
         
         strategy_cls = MISSION_STRATEGIES.get(mission_type)
         if strategy_cls is None:
@@ -75,6 +78,9 @@ class MissionStateMachine(Node):
         self.declare_parameter('align_yaw_tolerance_degrees', 7.5)
         self.declare_parameter('align_yaw_hold_time', 1.5)
         self.declare_parameter('require_frame_alignment', False)
+        self.declare_parameter('runtime_auto_start', False)
+        self.declare_parameter('runtime_mission_mode', '')
+        self.declare_parameter('runtime_max_trees', -1)
         self.flight_altitude = float(self.get_parameter('flight_altitude').value)
         self.approach_safe_dist = float(
             self.get_parameter('approach_distance').value)
@@ -85,11 +91,14 @@ class MissionStateMachine(Node):
         self.verification_retry_limit = int(
             self.get_parameter('verification_retry_limit').value)
         self.require_safety = bool(self.get_parameter('require_safety_monitor').value)
-        self.auto_start = bool(self.get_parameter('auto_start').value)
+        self.auto_start = bool(
+            self.get_parameter('runtime_auto_start').value)
         self.state_timeout = float(self.get_parameter('state_timeout').value)
         self.pose_timeout = float(self.get_parameter('pose_timeout').value)
-        self.mission_mode = str(
-            self.get_parameter('mission_mode').value).strip().lower()
+        self.mission_mode = (
+            str(self.get_parameter('runtime_mission_mode').value).strip()
+            or str(self.get_parameter('mission_mode').value).strip()
+        ).lower()
         if self.mission_mode not in ('single_tree', 'multi_tree'):
             raise ValueError(
                 "mission_mode harus 'single_tree' atau 'multi_tree'")
@@ -113,7 +122,11 @@ class MissionStateMachine(Node):
         self.require_frame_alignment = bool(
             self.get_parameter('require_frame_alignment').value)
         self.orbit_radius = float(self.get_parameter('orbit_radius').value)
-        self.max_trees = max(0, int(self.get_parameter('max_trees').value))
+        runtime_max_trees = int(
+            self.get_parameter('runtime_max_trees').value)
+        self.max_trees = max(0, (
+            runtime_max_trees if runtime_max_trees >= 0
+            else int(self.get_parameter('max_trees').value)))
 
         # ==========================================
         # Variabel State & Navigasi

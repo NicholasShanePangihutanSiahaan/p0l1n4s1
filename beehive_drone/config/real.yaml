@@ -191,6 +191,19 @@ priest_dyn_node:
 
     is_log_CEM_progress: True
 
-    reference_trajectory_states:
-      - "WAIT_ORBIT"
+    # Pada WAIT_ORBIT, PRIEST mengikuti reference Path lingkaran dari bridge.
+    # State lain memakai linear_goal dari FSM.
+    reference_trajectory_states: ["WAIT_ORBIT"]
+
+priest_avoidance_controller:
+  ros__parameters:
+    publish_rate: 20.0
+    path_timeout: 2.0
+    waypoint_lookahead: 0.60
+    goal_republish_period: 0.50
+    minimum_obstacle_radius: 0.10
+    minimum_obstacle_half_height: 0.25
+    orbit_radius: 2.7
+    orbit_reference_points: 120
+    reference_republish_period: 0.50
       

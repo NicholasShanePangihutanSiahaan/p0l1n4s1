@@ -30,8 +30,19 @@ class FlightManager(Node):
         self.declare_parameter("rangefinder_min_valid", 0.08)
         self.declare_parameter("rangefinder_max_valid", 20.0)
         self.declare_parameter("rangefinder_altitude_offset", 0.0)
-        self.altitude_source = str(self.get_parameter("altitude_source").value)
-        self.hover_tolerance = float(self.get_parameter("hover_tolerance").value)
+        # Nama runtime unik mencegah key node-spesifik real.yaml mengalahkan
+        # argumen launch yang dibawa sebagai parameter wildcard oleh launch_ros.
+        self.declare_parameter("runtime_altitude_source", "")
+        self.declare_parameter("runtime_hover_tolerance", -1.0)
+        runtime_altitude_source = str(
+            self.get_parameter("runtime_altitude_source").value).strip()
+        runtime_hover_tolerance = float(
+            self.get_parameter("runtime_hover_tolerance").value)
+        self.altitude_source = runtime_altitude_source or str(
+            self.get_parameter("altitude_source").value)
+        self.hover_tolerance = (
+            runtime_hover_tolerance if runtime_hover_tolerance >= 0.0
+            else float(self.get_parameter("hover_tolerance").value))
         self.rangefinder_topic = str(self.get_parameter("rangefinder_topic").value)
         self.rangefinder_timeout = max(0.1, float(self.get_parameter("rangefinder_timeout").value))
         self.rangefinder_min_valid = float(self.get_parameter("rangefinder_min_valid").value)

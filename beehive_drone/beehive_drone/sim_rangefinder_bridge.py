@@ -17,9 +17,12 @@ class SimulationRangefinderBridge(Node):
         self.declare_parameter('input_topic', '/range')
         self.declare_parameter('output_topic', '/simulation/rangefinder')
         self.declare_parameter('frame_id', 'range_link')
+        self.declare_parameter('measurement_offset', 0.0)
         input_topic = str(self.get_parameter('input_topic').value)
         output_topic = str(self.get_parameter('output_topic').value)
         self.frame_id = str(self.get_parameter('frame_id').value)
+        self.measurement_offset = float(
+            self.get_parameter('measurement_offset').value)
         self.publisher = self.create_publisher(
             Range, output_topic, qos_profile_sensor_data)
         self.create_subscription(
@@ -42,7 +45,9 @@ class SimulationRangefinderBridge(Node):
             abs(float(scan.angle_min)), abs(float(scan.angle_max)), 0.001)
         msg.min_range = float(scan.range_min)
         msg.max_range = float(scan.range_max)
-        msg.range = measurement
+        msg.range = (
+            measurement + self.measurement_offset
+            if math.isfinite(measurement) else measurement)
         self.publisher.publish(msg)
 
 

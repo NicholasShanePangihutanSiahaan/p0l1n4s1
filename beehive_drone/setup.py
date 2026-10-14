@@ -41,6 +41,7 @@ setup(
             'zed_frame_alignment = beehive_drone.frame_alignment:main',
             'detect_flower = beehive_drone.detect_flower_pose:main',
             'sim_sprayer = beehive_drone.sim_sprayer:main',
+            'priest_avoidance_controller = beehive_drone.priest_avoidance_controller:main',
         ],
     },
 )

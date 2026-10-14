@@ -19,6 +19,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PointCloudArray.msg"
   "msg/XYZ.msg"
   "msg/VNormals.msg"
+  "msg/AxisAlignedElipsoid.msg"
+  "msg/AxisAlignedElipsoidArray.msg"
   DEPENDENCIES sensor_msgs std_msgs geometry_msgs
 )
 
