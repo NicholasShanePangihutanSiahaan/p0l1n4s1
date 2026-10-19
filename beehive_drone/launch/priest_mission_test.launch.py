@@ -18,6 +18,7 @@ def generate_launch_description():
         DeclareLaunchArgument('mission_type', default_value='basic_orbit'),
         DeclareLaunchArgument('mission_mode', default_value='single_tree'),
         DeclareLaunchArgument('max_trees', default_value='0'),
+        DeclareLaunchArgument('altitude_source', default_value='local_position'),
         DeclareLaunchArgument(
             'enable_flower_detection', default_value='false'),
         IncludeLaunchDescription(
@@ -31,5 +32,6 @@ def generate_launch_description():
                 'enable_flower_detection':
                     LaunchConfiguration('enable_flower_detection'),
                 'record_data': 'false',
+                'altitude_source': LaunchConfiguration('altitude_source')
             }.items()),
     ])

@@ -2,6 +2,7 @@
   ros__parameters:
     orbit_radius: 2.7
     flight_altitude: 1.9
+    use_sim_time: false
 
 pcl_proc_node:
   ros__parameters:
@@ -162,13 +163,13 @@ priest_dyn_node:
   ros__parameters:
     plan_rate_hz: 7.0
     goal_tolerance: 0.15
-    horizon_seconds: 10.0
+    horizon_seconds: 5.0
 
-    num_samples: 100
+    num_samples: 50
     num_batch: 110
     max_obstacles: 60
     reference_samples: 300
-    cem_iterations: 13
+    cem_iterations: 10
 
     v_max: 0.90
     v_min: 0.0
@@ -176,13 +177,13 @@ priest_dyn_node:
     v_des: 0.55
     weight_smoothness: 1.0
     weight_track: 0.001
-    robot_radius: 0.25
+    robot_radius: 0.10
     safety_margin: 0.10
     goal_clearance: 0.08
     goal_lateral_weight: 0.0
 
-    odom_timeout: 1.0
-    obstacle_timeout: 2.0
+    odom_timeout: 20.0
+    obstacle_timeout: 20.0
     max_solve_age: 30.0
     max_start_drift: 0.50
     require_obstacles: True

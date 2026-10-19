@@ -4,7 +4,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction, GroupAction
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -24,6 +24,7 @@ def generate_launch_description():
     enable_flower = LaunchConfiguration('enable_flower_detection')
     altitude_source = LaunchConfiguration('altitude_source')
     hover_tolerance = LaunchConfiguration('hover_tolerance')
+    priest_delay = LaunchConfiguration('priest_delay')
 
     arguments = [
         DeclareLaunchArgument('config_file', default_value=default_config),
@@ -34,6 +35,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'mission_mode', default_value='single_tree',
             choices=['single_tree', 'multi_tree']),
+        DeclareLaunchArgument(
+            'priest_delay', default_value='10.0',
+            description='Delay untuk JIT Compilation dari node PRIEST.'),
         DeclareLaunchArgument(
             'max_trees', default_value='0',
             description='Tree limit in multi_tree mode; 0 is unlimited.'),
@@ -63,6 +67,14 @@ def generate_launch_description():
             default_value='/home/palmbee1/DTETI-WS/data/'),
     ]
 
+    priest_node = [
+        Node(
+            package='priest_dyn_traj', executable='priest_dyn_node',
+            name='priest_dyn_node', condition=IfCondition(use_priest),
+            parameters=[config], output='screen', emulate_tty=True),
+    ]
+
+
     nodes = [
         Node(
             package='beehive_drone', executable='tree_mapper',
@@ -70,10 +82,6 @@ def generate_launch_description():
         Node(
             package='beehive_drone', executable='vortex_avoidance_controller',
             condition=UnlessCondition(use_priest), output='screen'),
-        Node(
-            package='priest_dyn_traj', executable='priest_dyn_node',
-            name='priest_dyn_node', condition=IfCondition(use_priest),
-            parameters=[config], output='screen', emulate_tty=True),
         Node(
             package='beehive_drone', executable='priest_avoidance_controller',
             condition=IfCondition(use_priest), parameters=[config],
@@ -122,4 +130,22 @@ def generate_launch_description():
                 LaunchConfiguration('record_output_directory')],
             condition=IfCondition(record_data), output='screen'),
     ]
-    return LaunchDescription(arguments + nodes)
+
+    delayed_nodes = TimerAction(
+        period=priest_delay,
+        actions=nodes,
+        condition=IfCondition(use_priest)
+    )
+
+    immediate_nodes = GroupAction(
+        actions=nodes,
+        condition=UnlessCondition(use_priest),
+    )
+    return LaunchDescription(
+        arguments
+        + priest_node
+        + [
+            immediate_nodes,
+            delayed_nodes,
+        ]
+    )

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -610,7 +609,7 @@ class Priest3DNode(Node):
         else:
             centers, radii, obs_frame, updated = self.obstacles
             if now - updated > self.cfg['obstacle_timeout']:
-                self.warn('Stale obstacles or obstacle/odometry frame mismatch')
+                self.warn('Stale obstacles')
                 return None
 
         dropped_obstacles = max(

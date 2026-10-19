@@ -162,16 +162,16 @@ class PriestAvoidanceController(Node):
         self.create_subscription(
             Path, '/navigation/priest/trajectory/out',
             self.path_callback, reliable_qos)
-        self.create_subscription(
-            TrackedCylinderArray, '/global_cylinders',
-            self.obstacles_callback, sensor_qos)
+        # self.create_subscription(
+        #     TrackedCylinderArray, '/global_cylinders',
+        #     self.obstacles_callback, sensor_qos)
 
         self.goal_publisher = self.create_publisher(
             Pose, '/navigation/priest/linear_goal', reliable_qos)
         self.reference_publisher = self.create_publisher(
             Path, '/navigation/priest/trajectory/in', reliable_qos)
-        self.obstacle_publisher = self.create_publisher(
-            AxisAlignedElipsoidArray, '/ellipsoids', sensor_qos)
+        # self.obstacle_publisher = self.create_publisher(
+        #     AxisAlignedElipsoidArray, '/ellipsoids', sensor_qos)
         self.safe_target_publisher = self.create_publisher(
             PoseStamped, '/control/safe_target_pose', 10)
         rate = max(5.0, float(self.get_parameter('publish_rate').value))
