@@ -159,7 +159,7 @@ class MissionStateMachine(Node):
         self.last_vision_time = None
         self.last_vision_wait_log = None
         self.frame_alignment_ready = not self.require_frame_alignment
-        
+        self.alt_increase_pose = 2.0
         # Variabel deteksi bunga
         self.receiving_flower_pose = False
         self.done_receiving_flower_pose = False # memastikan cuman sekali terima data flower untuk sekali orbit
@@ -389,7 +389,7 @@ class MissionStateMachine(Node):
             self.mission_mode == 'multi_tree' and
             self.max_trees > 0 and completed_count >= self.max_trees)
         if single_tree_done or tree_limit_reached:
-            self.transition("ALIGN_HOME")
+            self.transition("DECREASE_ALT")
             if single_tree_done:
                 self.get_logger().info(
                     "Mode single_tree selesai. Kembali ke home.")
@@ -398,7 +398,7 @@ class MissionStateMachine(Node):
                     f"Target {self.max_trees} pohon tercapai. Kembali ke home.")
             return
 
-        self.transition("EXPLORE_ROW")
+        self.transition("DECREASE_ALT")
         self.get_logger().info(
             f"Pohon selesai ({completed_count}). Mencari pohon berikutnya.")
 
@@ -432,6 +432,25 @@ class MissionStateMachine(Node):
             self.navigation_altitude
             if self.navigation_altitude is not None else self.flight_altitude
         )
+        
+        qx, qy, qz, qw = self.euler_to_quaternion(0, 0, yaw)
+        goal.pose.orientation.x = qx
+        goal.pose.orientation.y = qy
+        goal.pose.orientation.z = qz
+        goal.pose.orientation.w = qw
+        
+        self.local_goal_pub.publish(goal)
+        
+    def publish_goal_alt(self, z, yaw):
+        goal = PoseStamped()
+        goal.header.frame_id = "odom"
+        goal.header.stamp = self.get_clock().now().to_msg()
+        
+        goal.pose.position.x = self.current_pose.pose.position.x
+        goal.pose.position.y = self.current_pose.pose.position.y
+        # flight_altitude adalah tinggi terhadap home untuk CommandTOL. Setelah
+        # takeoff, pertahankan koordinat Z lokal yang benar-benar dicapai FC.
+        goal.pose.position.z = float(z)
         
         qx, qy, qz, qw = self.euler_to_quaternion(0, 0, yaw)
         goal.pose.orientation.x = qx

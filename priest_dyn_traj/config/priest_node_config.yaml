@@ -2,7 +2,7 @@ priest_dyn_node:
   ros__parameters:
     plan_rate_hz: 7.0
     goal_tolerance: 0.15
-    horizon_seconds: 10.0
+    horizon_seconds: 2.0
 
     num_samples: 100
     num_batch: 110
