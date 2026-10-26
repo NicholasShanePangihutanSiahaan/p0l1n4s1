@@ -27,7 +27,7 @@ flight_manager:
   ros__parameters:
     # Gate takeoff/hover menggunakan tinggi AGL dari lidar bawah.
     altitude_source: rangefinder
-    hover_tolerance: 0.2
+    hover_tolerance: 1.0
     rangefinder_topic: /mavros/rangefinder/rangefinder
     rangefinder_timeout: 1.0
     rangefinder_min_valid: 0.08
@@ -55,7 +55,12 @@ mission_state_machine:
   ros__parameters:
     # Default aman/kompatibel dengan penerbangan satu pohon yang telah diuji.
     mission_mode: multi_tree
+    # X: takeoff; Z lokal yang dicapai dipertahankan sampai hover setelah approach.
     flight_altitude: 1.9
+    # Y: tinggi terhadap home sebelum orbit (bukan AGL).
+    pre_orbit_altitude: 2.0
+    altitude_transition_tolerance: 1.0
+    altitude_transition_hold_time: 1.5
     # Jarak horizontal titik approach terhadap pusat batang.
     approach_distance: 2.6
     tree_distance_tolerance: 0.5

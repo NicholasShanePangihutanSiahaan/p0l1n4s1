@@ -27,14 +27,20 @@ tree_mapper:
 
 mission_state_machine:
   ros__parameters:
+    # X: takeoff dan ketinggian navigasi sebelum/sesudah orbit.
     flight_altitude: 1.5
+    # Y: ketinggian pra-orbit terhadap home, sama dengan real.yaml.
+    pre_orbit_altitude: 2.5
+    altitude_transition_tolerance: 1.0
+    altitude_transition_hold_time: 1.5
+    mission_mode: single_tree
     # Sama dengan konfigurasi real: berhenti 1.5 m dari pusat batang.
     approach_distance: 1.5
     tree_distance_tolerance: 0.5
     approach_goal_tolerance: 0.15
     verification_retry_limit: 3
     require_safety_monitor: false
-    auto_start: true
+    auto_start: false
     state_timeout: 300.0
     pose_timeout: 5.0
     post_takeoff_hover_time: 2.0
@@ -57,7 +63,7 @@ dynamic_orbit_controller:
 flight_manager:
   ros__parameters:
     altitude_source: rangefinder
-    hover_tolerance: 0.2
+    hover_tolerance: 1.0
     rangefinder_topic: /simulation/rangefinder
     rangefinder_timeout: 1.0
     rangefinder_min_valid: 0.08
@@ -71,7 +77,7 @@ position_setpoint_controller:
     max_vertical_step: 0.05
     target_timeout: 0.75
     output_frame: map
-    terrain_following_enabled: true
+    terrain_following_enabled: false
     rangefinder_topic: /simulation/rangefinder
     desired_agl: 1.5
     rangefinder_timeout: 0.50
@@ -111,6 +117,6 @@ mission_analyzer:
     console_period: 2.0
     autosave_period: 10.0
     rangefinder_topic: /simulation/rangefinder
-    expected_takeoff_altitude: 1.5
+    expected_takeoff_altitude: 1.9
     expected_approach_distance: 1.5
     expected_orbit_radius: 1.5
