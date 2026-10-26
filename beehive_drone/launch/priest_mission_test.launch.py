@@ -21,6 +21,10 @@ def generate_launch_description():
         DeclareLaunchArgument('altitude_source', default_value='local_position'),
         DeclareLaunchArgument(
             'enable_flower_detection', default_value='false'),
+        DeclareLaunchArgument(
+            'priest_delay', default_value='15.0',
+            description='Delay untuk JIT Compilation dari node PRIEST.')
+        ,
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(mission_launch),
             launch_arguments={
@@ -32,6 +36,7 @@ def generate_launch_description():
                 'enable_flower_detection':
                     LaunchConfiguration('enable_flower_detection'),
                 'record_data': 'false',
-                'altitude_source': LaunchConfiguration('altitude_source')
+                'altitude_source': LaunchConfiguration('altitude_source'),
+                'priest_delay': LaunchConfiguration('priest_delay')
             }.items()),
     ])

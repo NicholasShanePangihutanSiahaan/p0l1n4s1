@@ -175,7 +175,7 @@ class Planner:
                 'Planner did not find a finite path with a safe endpoint; '
                 f'lookahead_goal_corrected={bool(goal_corrected)}'
             )
-        if not collision_free(points, centers, radii):
+        if self.cfg['use_safety'] and not collision_free(points, centers, radii):
             raise ValueError('Planner output intersects an inflated ellipsoid')
         return points, bool(goal_corrected)
 
@@ -224,8 +224,11 @@ class Priest3DNode(Node):
             reference_trajectory_states=['WAIT_ORBIT'],
             device='cpu',
             seed=0,
+            use_safety=False,
         )
         self.cfg = {k: self.declare_parameter(k, v).value for k, v in defaults.items()}
+        if not isinstance(self.cfg['use_safety'], bool):
+            raise ValueError('use_safety must be a boolean')
         if not isinstance(self.cfg['is_log_CEM_progress'], bool):
             raise ValueError('is_log_CEM_progress must be a boolean')
 
@@ -264,6 +267,11 @@ class Priest3DNode(Node):
             raise ValueError('Use >=12 trajectory/reference samples and >=20 batch trajectories')
         if self.cfg['max_obstacles'] < 1 or self.cfg['cem_iterations'] < 1:
             raise ValueError('max_obstacles and cem_iterations must be >=1')
+
+
+        self.get_logger().warn(
+            f"Safety is {'ON' if self.cfg['use_safety'] else 'OFF'}"
+        )
 
         # Callbacks run on the ROS executor; only optimization runs in the
         # worker. A revision number identifies the reference used by each job.
@@ -740,14 +748,14 @@ class Priest3DNode(Node):
                     or np.linalg.norm(position - start_position)
                     > self.cfg['max_start_drift']
                 ):
-                    self.clear()
+                    # self.clear()
                     self.cem_info(
                         f'CEM #{solve_id} finished in {elapsed_ms:.1f} ms; '
-                        'result discarded as stale; '
+                        'result discarded as STALE; '
                         f'lookahead_goal_corrected={goal_corrected}'
                     )
-                    self.warn('Discarded stale planner output')
-                elif (
+                    self.warn(f'Discarded stale planner output by distance change CEM #{solve_id}')
+                elif self.cfg['use_safety'] and (
                     not collision_free(points, centers, radii)
                     or not collision_free(
                         np.vstack([position, points[0]]), centers, radii
