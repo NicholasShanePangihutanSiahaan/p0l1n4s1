@@ -54,6 +54,9 @@ class MissionStateMachine(Node):
         self.approach_safe_dist = MissionConfig.APPROACH_SAFE_DIST
         self.flight_altitude = MissionConfig.FLIGHT_ALTITUDE
         self.declare_parameter('flight_altitude', self.flight_altitude)
+        self.declare_parameter('pre_orbit_altitude', self.flight_altitude)
+        self.declare_parameter('altitude_transition_tolerance', 0.15)
+        self.declare_parameter('altitude_transition_hold_time', 1.5)
         self.declare_parameter('approach_distance', self.approach_safe_dist)
         self.declare_parameter('tree_distance_tolerance', 0.5)
         self.declare_parameter('approach_goal_tolerance', 0.15)
@@ -82,6 +85,16 @@ class MissionStateMachine(Node):
         self.declare_parameter('align_yaw_hold_time', 1.5)
         self.declare_parameter('require_frame_alignment', False)
         self.flight_altitude = float(self.get_parameter('flight_altitude').value)
+        self.pre_orbit_altitude = float(self.get_parameter('pre_orbit_altitude').value)
+        self.altitude_transition_tolerance = float(
+            self.get_parameter('altitude_transition_tolerance').value)
+        self.altitude_transition_hold_time = float(
+            self.get_parameter('altitude_transition_hold_time').value)
+        if (not all(math.isfinite(value) and value > 0.0 for value in (
+                self.pre_orbit_altitude, self.altitude_transition_tolerance))
+                or not math.isfinite(self.altitude_transition_hold_time)
+                or self.altitude_transition_hold_time < 0.0):
+            raise ValueError('Parameter transisi altitude tidak valid')
         self.approach_safe_dist = float(
             self.get_parameter('approach_distance').value)
         self.tree_distance_tolerance = float(
@@ -158,6 +171,9 @@ class MissionStateMachine(Node):
         self.hold_y = 0.0
         self.hold_yaw = 0.0
         self.navigation_altitude = None
+        self.takeoff_navigation_altitude = None
+        self.home_altitude = None
+        self.altitude_reached_since = None
         self.abort_command_sent = False
         self.last_landing_command_time = None
         self.trees = []
@@ -354,6 +370,7 @@ class MissionStateMachine(Node):
         self.previous_state = self.state
         self.state = state
         self.state_since = self.get_clock().now()
+        self.altitude_reached_since = None
         if state == 'ABORT':
             self.abort_command_sent = False
         if state == 'LANDING':
