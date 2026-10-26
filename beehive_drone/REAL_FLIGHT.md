@@ -277,3 +277,25 @@ Point cloud tidak diperlukan oleh BB node dan sengaja tidak dimasukkan ke
 command default karena ukurannya besar. Tambahkan
 `/zed/zed_node/point_cloud/cloud_registered` hanya untuk diagnosis depth bila
 media penyimpanan dan bandwidth Jetson mencukupi.
+
+### Altitude per fase pada basic_orbit dan virtual_tree_test
+
+Konfigurasi real memakai `terrain_following_enabled: false`. `flight_altitude`
+adalah X untuk perintah takeoff. Z lokal saat konfirmasi takeoff disimpan dan
+menjadi target sampai hover/verifikasi setelah approach selesai, seperti alur
+sebelumnya. `pre_orbit_altitude` adalah Y dalam meter terhadap home; home Z lokal
+direkam tepat sebelum perintah takeoff. Target pra-orbit = home Z + Y, bukan AGL
+atau nilai `desired_agl`.
+
+Setelah verifikasi pohon, `PRE_ORBIT_ALTITUDE` menahan XY dan mengubah target Z.
+Orbit dimulai setelah error Z berada dalam `altitude_transition_tolerance`
+selama `altitude_transition_hold_time` detik berturut-turut. Orbit memakai target
+Y tanpa gate altitude tambahan di FSM; kontrol posisi autopilot tetap aktif.
+Setelah hover pasca-orbit, `RESTORE_FLIGHT_ALTITUDE` mengembalikan target Z yang
+disimpan setelah takeoff dan menunggu dengan toleransi yang sama sebelum pulang
+atau melanjutkan ke pohon berikutnya. Kedua state memakai timeout/safety misi.
+
+Contoh: `flight_altitude: 1.5`, `pre_orbit_altitude: 2.0`,
+`altitude_transition_tolerance: 0.15`, `altitude_transition_hold_time: 1.5`.
+Alur ini memerlukan terrain-following tetap nonaktif agar target home tidak
+digantikan koreksi AGL.
