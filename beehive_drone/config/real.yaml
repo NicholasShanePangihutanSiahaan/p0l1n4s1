@@ -1,3 +1,8 @@
+# Satu mode untuk FSM dan controller: home_relative atau terrain_following.
+/**:
+  ros__parameters:
+    altitude_mode: home_relative
+
 pcl_proc_node:
   ros__parameters:
     # Dipertahankan untuk replay/legacy pcl_proc_node. Pada penerbangan real,
@@ -116,21 +121,17 @@ position_setpoint_controller:
     max_vertical_step: 0.05
     target_timeout: 0.75
     output_frame: map
-    # EKF tetap memakai local-Z yang halus; rangefinder hanya menggeser target
-    # vertikal agar clearance terhadap permukaan tetap 1.5 m.
-    terrain_following_enabled: false
+    # Hanya dipakai pada mode terrain_following. Target AGL berasal dari FSM.
     rangefinder_topic: /mavros/rangefinder/rangefinder
-    desired_agl: 2.3
-    rangefinder_timeout: 0.50
+    rangefinder_timeout: 0.5
     rangefinder_min_valid: 0.08
     rangefinder_max_valid: 8.0
     rangefinder_altitude_offset: 0.0
     range_filter_alpha: 0.35
     range_median_window: 5
-    minimum_tilt_cosine: 0.70
+    minimum_tilt_cosine: 0.7
     max_terrain_correction: 1.0
-    max_terrain_target_rate: 0.50
-    hold_position_on_range_loss: true
+    max_terrain_target_rate: 0.5
 
 # Dipakai jika real launch dialihkan ke kontrol kecepatan untuk tuning.
 velocity_controller:
