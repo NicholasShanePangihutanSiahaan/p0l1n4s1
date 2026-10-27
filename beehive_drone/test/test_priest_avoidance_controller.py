@@ -26,7 +26,7 @@ def test_selects_first_pose_beyond_lookahead():
         SimpleNamespace(pose=pose(1.2, 0.0)),
     ])
 
-    selected = select_lookahead_pose(path, pose(0.0, 0.0), 0.6)
+    selected, progress = select_lookahead_pose(path, pose(0.0, 0.0), 0.6)
 
     assert selected.position.x == 0.7
 
@@ -37,7 +37,7 @@ def test_uses_last_pose_when_path_is_shorter_than_lookahead():
         SimpleNamespace(pose=pose(0.2, 0.0)),
     ])
 
-    selected = select_lookahead_pose(path, pose(0.0, 0.0), 0.6)
+    selected, progress = select_lookahead_pose(path, pose(0.0, 0.0), 0.6)
 
     assert selected.position.x == 0.2
 

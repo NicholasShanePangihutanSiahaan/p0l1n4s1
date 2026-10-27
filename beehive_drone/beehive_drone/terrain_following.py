@@ -45,7 +45,6 @@ class TerrainFollower:
 
     def __init__(
         self,
-        desired_agl,
         timeout,
         filter_alpha,
         max_target_rate,
@@ -54,7 +53,6 @@ class TerrainFollower:
         sensor_offset=0.0,
         median_window=5,
     ):
-        self.desired_agl = float(desired_agl)
         self.timeout = max(0.05, float(timeout))
         self.filter_alpha = clamp(float(filter_alpha), 0.01, 1.0)
         self.max_target_rate = max(0.01, float(max_target_rate))
@@ -107,12 +105,12 @@ class TerrainFollower:
             and float(now) - self.last_range_time <= self.timeout
         )
 
-    def compute_target(self, local_z, nominal_z, now):
+    def compute_target(self, local_z, nominal_z, now, desired_agl):
         """Return ``(target_z, status)`` for the current controller cycle."""
         now = float(now)
         if self.range_is_fresh(now):
             error = clamp(
-                self.desired_agl - self.filtered_agl,
+                float(desired_agl) - self.filtered_agl,
                 -self.max_correction,
                 self.max_correction,
             )
@@ -136,10 +134,3 @@ class TerrainFollower:
 
         self.status = self.WAITING_FOR_RANGE
         return float(nominal_z), self.status
-
-    @property
-    def agl_error(self):
-        """Latest desired-minus-measured AGL error, or NaN before first data."""
-        if self.filtered_agl is None:
-            return math.nan
-        return self.desired_agl - self.filtered_agl

@@ -1,8 +1,7 @@
+# Satu mode untuk FSM dan controller: home_relative atau terrain_following.
 /**:
   ros__parameters:
-    orbit_radius: 2.7
-    flight_altitude: 1.9
-    use_sim_time: false
+    altitude_mode: home_relative
 
 pcl_proc_node:
   ros__parameters:
@@ -33,7 +32,7 @@ flight_manager:
   ros__parameters:
     # Gate takeoff/hover menggunakan tinggi AGL dari lidar bawah.
     altitude_source: rangefinder
-    hover_tolerance: 0.2
+    hover_tolerance: 1.0
     rangefinder_topic: /mavros/rangefinder/rangefinder
     rangefinder_timeout: 1.0
     rangefinder_min_valid: 0.08
@@ -61,6 +60,12 @@ mission_state_machine:
   ros__parameters:
     # Default aman/kompatibel dengan penerbangan satu pohon yang telah diuji.
     mission_mode: single_tree
+    # X: takeoff; Z lokal yang dicapai dipertahankan sampai hover setelah approach.
+    flight_altitude: 1.9
+    # Y: tinggi terhadap home sebelum orbit (bukan AGL).
+    pre_orbit_altitude: 2.0
+    altitude_transition_tolerance: 1.0
+    altitude_transition_hold_time: 1.5
     # Jarak horizontal titik approach terhadap pusat batang.
     approach_distance: 2.6
     tree_distance_tolerance: 0.5
@@ -83,12 +88,21 @@ mission_state_machine:
     vision_pose_topic: /mavros/vision_pose/pose
     vision_pose_timeout: 1.0
     vision_warmup_time: 5.0
+    orbit_radius: 3.0
     # Hanya dipakai dalam multi_tree; 0: tanpa batas jumlah pohon.
-    max_trees: 0
+    max_trees: 2
+    # Hanya aktif ketika mission_type=virtual_tree_test.
+    require_tree_ahead: true
+    virtual_tree_position_mode: toward_home
+    virtual_tree_position_x: 6.0
+    virtual_tree_position_y: 3.0
+    virtual_tree_offset_toward_home: 6.0
+    virtual_tree_id: 9001
     abort_mode: BRAKE
 
 dynamic_orbit_controller:
   ros__parameters:
+    orbit_radius: 2.6
     orbit_altitude: 1.9
     orbit_velocity: 0.55
     orbit_timeout: 180.0
@@ -107,21 +121,17 @@ position_setpoint_controller:
     max_vertical_step: 0.05
     target_timeout: 0.75
     output_frame: map
-    # EKF tetap memakai local-Z yang halus; rangefinder hanya menggeser target
-    # vertikal agar clearance terhadap permukaan tetap 1.5 m.
-    terrain_following_enabled: false
+    # Hanya dipakai pada mode terrain_following. Target AGL berasal dari FSM.
     rangefinder_topic: /mavros/rangefinder/rangefinder
-    desired_agl: 2.3
-    rangefinder_timeout: 0.50
+    rangefinder_timeout: 0.5
     rangefinder_min_valid: 0.08
     rangefinder_max_valid: 8.0
     rangefinder_altitude_offset: 0.0
     range_filter_alpha: 0.35
     range_median_window: 5
-    minimum_tilt_cosine: 0.70
+    minimum_tilt_cosine: 0.7
     max_terrain_correction: 1.0
-    max_terrain_target_rate: 0.50
-    hold_position_on_range_loss: true
+    max_terrain_target_rate: 0.5
 
 # Dipakai jika real launch dialihkan ke kontrol kecepatan untuk tuning.
 velocity_controller:
@@ -164,47 +174,40 @@ priest_dyn_node:
     plan_rate_hz: 7.0
     goal_tolerance: 0.15
     horizon_seconds: 5.0
-
     num_samples: 50
     num_batch: 110
     max_obstacles: 60
     reference_samples: 300
     cem_iterations: 10
-
-    v_max: 0.90
+    v_max: 0.9
     v_min: 0.0
-    a_max: 1.30
+    a_max: 1.3
     v_des: 0.55
     weight_smoothness: 1.0
     weight_track: 0.001
-    robot_radius: 0.10
-    safety_margin: 0.10
+    robot_radius: 0.1
+    safety_margin: 0.1
     goal_clearance: 0.08
     goal_lateral_weight: 0.0
-
     odom_timeout: 20.0
     obstacle_timeout: 20.0
     max_solve_age: 30.0
-    max_start_drift: 0.50
-    require_obstacles: True
-    device: 'cpu'
+    max_start_drift: 0.5
+    require_obstacles: true
+    device: cpu
     seed: 0
-
-    is_log_CEM_progress: True
-
-    # Pada WAIT_ORBIT, PRIEST mengikuti reference Path lingkaran dari bridge.
-    # State lain memakai linear_goal dari FSM.
-    reference_trajectory_states: ["WAIT_ORBIT"]
+    is_log_CEM_progress: true
+    reference_trajectory_states:
+    - WAIT_ORBIT
 
 priest_avoidance_controller:
   ros__parameters:
     publish_rate: 20.0
     path_timeout: 2.0
-    waypoint_lookahead: 0.60
-    goal_republish_period: 0.50
-    minimum_obstacle_radius: 0.10
+    waypoint_lookahead: 0.6
+    goal_republish_period: 0.5
+    minimum_obstacle_radius: 0.1
     minimum_obstacle_half_height: 0.25
     orbit_radius: 2.7
     orbit_reference_points: 120
-    reference_republish_period: 0.50
-      
+    reference_republish_period: 0.5

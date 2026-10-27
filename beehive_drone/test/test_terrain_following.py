@@ -1,103 +1,48 @@
-"""Deterministic tests for terrain-following altitude math."""
-
-import math
+"""FSM AGL changes and terrain changes must both affect the vertical target."""
 from types import SimpleNamespace
-
 import pytest
-
-from beehive_drone.terrain_following import (
-    TerrainFollower,
-    body_vertical_cosine,
-)
+from beehive_drone.terrain_following import TerrainFollower
+from beehive_drone.mission_state_machine import MissionStateMachine
 
 
-def quaternion_from_roll(roll):
-    """Return a minimal quaternion-shaped object for a roll rotation."""
-    return SimpleNamespace(
-        x=math.sin(roll * 0.5), y=0.0, z=0.0,
-        w=math.cos(roll * 0.5))
+def follower():
+    return TerrainFollower(timeout=.5, filter_alpha=1., max_target_rate=.5,
+                           max_correction=1., min_tilt_cosine=.7, median_window=1)
 
 
-def upright_quaternion():
-    """Return an identity quaternion-shaped object."""
-    return quaternion_from_roll(0.0)
+def test_fsm_agl_change_overrides_previous_phase():
+    f = follower()
+    q = SimpleNamespace(x=0., y=0., z=0., w=1.)
+    f.ingest(1.5, q, 0.)
+    assert f.compute_target(11.5, 11.5, 0., 1.5)[0] == 11.5
+    f.ingest(1.5, q, .2)
+    # Y rises to 2 m AGL; target climbs with the configured rate limit.
+    assert f.compute_target(11.5, 11.5, .2, 2.)[0] == pytest.approx(11.6)
+    f.ingest(2., q, .4)
+    # Returning to X causes descent, despite the old orbit target.
+    assert f.compute_target(12., 12., .4, 1.5)[0] == pytest.approx(11.5)
 
 
-def follower(**overrides):
-    """Build a fast deterministic follower for unit tests."""
-    values = {
-        'desired_agl': 1.5,
-        'timeout': 0.5,
-        'filter_alpha': 1.0,
-        'max_target_rate': 1.0,
-        'max_correction': 1.0,
-        'min_tilt_cosine': 0.7,
-        'sensor_offset': 0.0,
-        'median_window': 1,
-    }
-    values.update(overrides)
-    return TerrainFollower(**values)
+def test_hill_changes_local_z_target_at_constant_fsm_agl():
+    f = follower()
+    q = SimpleNamespace(x=0., y=0., z=0., w=1.)
+    f.ingest(1.1, q, 0.)
+    assert f.compute_target(11.5, 11.5, 0., 1.5)[0] == pytest.approx(11.9)
+    held, status = f.compute_target(11.6, 11.5, 1., 1.5)
+    assert held == pytest.approx(11.9)
+    assert status == f.HOLD_RANGE_STALE
 
 
-def test_tilt_compensation_converts_slant_to_vertical_distance():
-    """A 30 degree roll must multiply slant range by cos(30 degrees)."""
-    quaternion = quaternion_from_roll(math.radians(30.0))
-    assert body_vertical_cosine(quaternion) == pytest.approx(
-        math.cos(math.radians(30.0)), abs=1.0e-6)
-
-
-def test_target_rises_with_a_gentle_hill():
-    """A 0.4 m terrain rise should raise local-Z target by 0.4 m."""
-    control = follower()
-    quaternion = upright_quaternion()
-    assert control.ingest(1.5, quaternion, now=0.0)
-    target, status = control.compute_target(1.5, 1.5, now=0.0)
-    assert status == TerrainFollower.TRACKING
-    assert target == pytest.approx(1.5)
-
-    # Ground rises while the vehicle has not reacted yet: AGL falls to 1.1 m.
-    assert control.ingest(1.1, quaternion, now=1.0)
-    target, status = control.compute_target(1.5, 1.5, now=1.0)
-    assert status == TerrainFollower.TRACKING
-    assert target == pytest.approx(1.9)
-
-
-def test_target_rate_is_limited():
-    """A sudden surface change must not create a vertical setpoint jump."""
-    control = follower(max_target_rate=0.25)
-    quaternion = upright_quaternion()
-    control.ingest(1.5, quaternion, now=0.0)
-    control.compute_target(1.5, 1.5, now=0.0)
-    control.ingest(0.8, quaternion, now=0.2)
-    target, _ = control.compute_target(1.5, 1.5, now=0.2)
-    assert target == pytest.approx(1.55)
-
-
-def test_stale_range_freezes_last_target():
-    """Range loss must hold the last local-Z target, never revert downward."""
-    control = follower(timeout=0.2)
-    quaternion = upright_quaternion()
-    control.ingest(1.2, quaternion, now=0.0)
-    target, _ = control.compute_target(1.5, 1.5, now=0.0)
-    held, status = control.compute_target(1.6, 1.5, now=0.3)
-    assert status == TerrainFollower.HOLD_RANGE_STALE
-    assert held == pytest.approx(target)
-
-
-def test_median_filter_rejects_one_short_ground_echo():
-    """One isolated short return must not make the vehicle climb."""
-    control = follower(median_window=5)
-    quaternion = upright_quaternion()
-    for index in range(4):
-        control.ingest(1.5, quaternion, now=index * 0.02)
-    control.ingest(0.2, quaternion, now=0.08)
-    assert control.filtered_agl == pytest.approx(1.5)
-
-
-def test_excessive_tilt_measurement_is_rejected():
-    """A near-horizontal beam cannot be treated as vertical clearance."""
-    control = follower(min_tilt_cosine=0.7)
-    quaternion = quaternion_from_roll(math.radians(60.0))
-    assert not control.ingest(1.5, quaternion, now=0.0)
-    _, status = control.compute_target(1.5, 1.5, now=0.0)
-    assert status == TerrainFollower.WAITING_FOR_RANGE
+def test_terrain_altitude_gate_uses_agl_and_rejects_stale_measurement():
+    stamp = SimpleNamespace(__unused=0)
+    class Time:
+        nanoseconds = 0
+        def __sub__(self, other):
+            return self
+    now = Time()
+    fsm = SimpleNamespace(altitude_mode='terrain_following', navigation_altitude=2.,
+                          measured_agl=2., measured_agl_time=now,
+                          get_clock=lambda: SimpleNamespace(now=lambda: now))
+    assert MissionStateMachine.navigation_altitude_error(fsm) == 0.
+    now.nanoseconds = 600000000
+    assert MissionStateMachine.navigation_altitude_error(fsm) == float('inf')

@@ -1,6 +1,10 @@
 import math
 
-from beehive_drone.mission_state_machine import landing_command_due, yaw_aligned
+from functools import partial
+from beehive_drone.mission_state_machine import MissionStateMachine
+
+landing_command_due = partial(MissionStateMachine.landing_command_due, None)
+yaw_aligned = partial(MissionStateMachine.yaw_aligned, None)
 
 
 def test_first_land_request_is_sent():
