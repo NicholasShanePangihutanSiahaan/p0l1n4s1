@@ -90,7 +90,9 @@ class BasicOrbitMission(BaseMissionStrategy):
                 fsm.hold_x = cx
                 fsm.hold_y = cy
                 fsm.hold_yaw = fsm.takeoff_yaw
-                fsm.navigation_altitude = fsm.current_pose.pose.position.z
+                fsm.navigation_altitude = (
+                    fsm.flight_altitude if fsm.altitude_mode == 'terrain_following'
+                    else fsm.current_pose.pose.position.z)
                 fsm.takeoff_navigation_altitude = float(fsm.navigation_altitude)
                 fsm.last_tree_x = cx
                 fsm.last_tree_y = cy
@@ -185,11 +187,12 @@ class BasicOrbitMission(BaseMissionStrategy):
                         fsm.hold_x, fsm.hold_y = cx, cy
                         fsm.hold_yaw = target_yaw
                         fsm.navigation_altitude = (
-                            fsm.home_altitude + fsm.pre_orbit_altitude)
+                            fsm.pre_orbit_altitude if fsm.altitude_mode == 'terrain_following'
+                            else fsm.home_altitude + fsm.pre_orbit_altitude)
                         fsm.transition("PRE_ORBIT_ALTITUDE")
                         fsm.get_logger().info(
                             f"Pohon valid. Menuju altitude pra-orbit "
-                            f"{fsm.pre_orbit_altitude:.2f} m terhadap home.")
+                            f"{fsm.pre_orbit_altitude:.2f} m (mode={fsm.altitude_mode}).")
                     else:
                         fsm.verification_retries += 1
                         if fsm.verification_retries <= fsm.verification_retry_limit:
@@ -219,10 +222,9 @@ class BasicOrbitMission(BaseMissionStrategy):
                     fsm.transition("EXPLORE_ROW")
 
         elif fsm.state in ("PRE_ORBIT_ALTITUDE", "RESTORE_FLIGHT_ALTITUDE"):
-            # Hold XY while changing local Z; rangefinder/desired_agl is not used.
+            # Hold XY while changing local Z to the mission target.
             fsm.publish_goal(fsm.hold_x, fsm.hold_y, fsm.hold_yaw)
-            error = abs(float(fsm.current_pose.pose.position.z)
-                        - fsm.navigation_altitude)
+            error = fsm.navigation_altitude_error()
             if error <= fsm.altitude_transition_tolerance:
                 now = fsm.get_clock().now()
                 if fsm.altitude_reached_since is None:
@@ -243,7 +245,9 @@ class BasicOrbitMission(BaseMissionStrategy):
             target_msg = Point()
             target_msg.x = fsm.target_tree.x
             target_msg.y = fsm.target_tree.y
-            target_msg.z = float(fsm.navigation_altitude)
+            target_msg.z = (float(fsm.current_pose.pose.position.z)
+                            if fsm.altitude_mode == 'terrain_following'
+                            else float(fsm.navigation_altitude))
             fsm.orbit_target_pub.publish(target_msg)
             
             start_msg = Bool(); start_msg.data = True
