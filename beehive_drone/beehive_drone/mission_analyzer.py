@@ -103,10 +103,6 @@ class MissionAnalyzer(Node):
             'zed_z_m': math.nan, 'vision_z_m': math.nan,
             'telemetry_altitude_m': math.nan, 'target_altitude_m': math.nan,
             'setpoint_z_m': math.nan, 'is_hovering': False,
-            'terrain_measured_agl_m': math.nan,
-            'terrain_agl_error_m': math.nan,
-            'terrain_target_z_m': math.nan,
-            'terrain_status': '',
         }
         self.diagnostic_samples = []
         self.fc_messages = []
@@ -150,14 +146,7 @@ class MissionAnalyzer(Node):
                                  self.hover_callback, 10)
         self.create_subscription(PoseStamped, '/mavros/setpoint_position/local',
                                  self.setpoint_callback, 10)
-        self.create_subscription(Float32, '/control/terrain/measured_agl',
-                                 self.terrain_agl_callback, 10)
-        self.create_subscription(Float32, '/control/terrain/agl_error',
-                                 self.terrain_error_callback, 10)
-        self.create_subscription(Float32, '/control/terrain/target_z',
-                                 self.terrain_target_callback, 10)
-        self.create_subscription(String, '/control/terrain/status',
-                                 self.terrain_status_callback, 10)
+
         self.create_subscription(StatusText, '/mavros/statustext/recv',
                                  self.statustext_callback, qos_recv)
         self.create_timer(self.sample_period, self.sample)
@@ -279,21 +268,6 @@ class MissionAnalyzer(Node):
         self.mark_received('setpoint')
         self.diagnostics['setpoint_z_m'] = float(msg.pose.position.z)
 
-    def terrain_agl_callback(self, msg):
-        self.mark_received('terrain_control')
-        self.diagnostics['terrain_measured_agl_m'] = float(msg.data)
-
-    def terrain_error_callback(self, msg):
-        self.mark_received('terrain_control')
-        self.diagnostics['terrain_agl_error_m'] = float(msg.data)
-
-    def terrain_target_callback(self, msg):
-        self.mark_received('terrain_control')
-        self.diagnostics['terrain_target_z_m'] = float(msg.data)
-
-    def terrain_status_callback(self, msg):
-        self.mark_received('terrain_control')
-        self.diagnostics['terrain_status'] = str(msg.data)
 
     def statustext_callback(self, msg):
         self.fc_messages.append({
@@ -375,7 +349,7 @@ class MissionAnalyzer(Node):
             'local_pose', 'mavros_state', 'extended_state', 'rangefinder',
             'static_pressure', 'relative_alt', 'local_velocity', 'vision_pose',
             'zed_pose', 'telemetry_altitude', 'target_altitude', 'hover',
-            'setpoint', 'terrain_control')
+            'setpoint')
         for name in tracked_topics:
             age = self.topic_age(name, now)
             diag[f'{name}_received'] = name in self.topic_last_seen
@@ -431,54 +405,6 @@ class MissionAnalyzer(Node):
             return ordered[lower]
         fraction = position - lower
         return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
-
-    def terrain_statistics(self):
-        active_states = {
-            'EXPLORE_ROW', 'APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT',
-            'WAIT_ORBIT', 'POST_ORBIT_HOVER', 'ALIGN_HOME',
-            'RETURN_TO_HOME', 'HOME_HOVER',
-        }
-        active = [
-            item for item in self.diagnostic_samples
-            if item.get('state') in active_states
-        ]
-        tracking = [
-            item for item in active
-            if item.get('terrain_status') == 'TRACKING'
-            and math.isfinite(item.get('terrain_measured_agl_m', math.nan))
-            and math.isfinite(item.get('terrain_agl_error_m', math.nan))
-        ]
-        agl_values = [item['terrain_measured_agl_m'] for item in tracking]
-        errors = [item['terrain_agl_error_m'] for item in tracking]
-        absolute_errors = [abs(value) for value in errors]
-
-        def mean(values):
-            return sum(values) / len(values) if values else None
-
-        agl_mean = mean(agl_values)
-        agl_std = None
-        if agl_values:
-            agl_std = math.sqrt(sum(
-                (value - agl_mean) ** 2 for value in agl_values) / len(agl_values))
-        rmse = None
-        if errors:
-            rmse = math.sqrt(sum(value * value for value in errors) / len(errors))
-        return {
-            'desired_agl_m': self.expected_takeoff_altitude,
-            'active_sample_count': len(active),
-            'tracking_sample_count': len(tracking),
-            'tracking_availability_percent': (
-                100.0 * len(tracking) / len(active) if active else 0.0),
-            'mean_agl_m': agl_mean,
-            'standard_deviation_agl_m': agl_std,
-            'minimum_agl_m': min(agl_values) if agl_values else None,
-            'maximum_agl_m': max(agl_values) if agl_values else None,
-            'mean_absolute_error_m': mean(absolute_errors),
-            'rmse_m': rmse,
-            'p95_absolute_error_m': self.percentile(absolute_errors, 95.0),
-            'maximum_absolute_error_m': (
-                max(absolute_errors) if absolute_errors else None),
-        }
 
     def state_duration_statistics(self):
         durations = {}
@@ -563,7 +489,7 @@ class MissionAnalyzer(Node):
         total = len(self.diagnostic_samples)
         topic_names = (
             'local_pose', 'mavros_state', 'rangefinder', 'local_velocity',
-            'vision_pose', 'zed_pose', 'terrain_control')
+            'vision_pose', 'zed_pose')
         result = {'sample_count': total}
         for topic in topic_names:
             healthy = sum(
@@ -599,11 +525,10 @@ class MissionAnalyzer(Node):
             'coverage_percent': 100.0 * inspected / count if count else 0.0,
             'sample_count': len(self.samples),
             'mission_configuration': {
-                'takeoff_and_agl_target_m': self.expected_takeoff_altitude,
+                'takeoff_target_m': self.expected_takeoff_altitude,
                 'approach_distance_m': self.expected_approach_distance,
                 'orbit_radius_m': self.expected_orbit_radius,
             },
-            'terrain_following': self.terrain_statistics(),
             'flight_geometry': self.flight_geometry_statistics(),
             'state_durations_s': self.state_duration_statistics(),
             'sensor_availability': self.sensor_availability_statistics(),
@@ -652,8 +577,6 @@ class MissionAnalyzer(Node):
             'local_vx_mps', 'local_vy_mps', 'local_vz_mps',
             'zed_z_m', 'vision_z_m',
             'telemetry_altitude_m', 'target_altitude_m', 'setpoint_z_m',
-            'terrain_measured_agl_m', 'terrain_agl_error_m',
-            'terrain_target_z_m', 'terrain_status',
             'expected_takeoff_altitude_m', 'is_hovering',
             'relative_alt_from_home_m', 'local_z_from_home_m',
             'zed_z_from_home_m', 'vision_z_from_home_m',
@@ -664,7 +587,7 @@ class MissionAnalyzer(Node):
                 'local_pose', 'mavros_state', 'extended_state', 'rangefinder',
                 'static_pressure', 'relative_alt', 'local_velocity', 'vision_pose',
                 'zed_pose', 'telemetry_altitude', 'target_altitude', 'hover',
-                'setpoint', 'terrain_control'):
+                'setpoint'):
             diagnostic_fields.extend(
                 [f'{name}_received', f'{name}_age_s', f'{name}_stale'])
         self.write_csv(self.output_dir / 'altitude_diagnostics.csv',
@@ -760,7 +683,6 @@ class MissionAnalyzer(Node):
                 ('vision_z_m', 'Vision pose Z', 'tab:brown'),
                 ('target_altitude_m', 'Target altitude', 'tab:red'),
                 ('setpoint_z_m', 'Setpoint Z', 'tab:pink'),
-                ('terrain_target_z_m', 'Terrain target Z', 'tab:olive'),
                 ('expected_takeoff_altitude_m', 'Expected takeoff', 'black'),
             )
             for key, label, color in series:
@@ -773,8 +695,6 @@ class MissionAnalyzer(Node):
                         label='Target - rel_alt', color='tab:red')
             err_ax.plot(dts, [item['local_z_error_m'] for item in ds],
                         label='Setpoint Z - local Z', color='tab:cyan')
-            err_ax.plot(dts, [item['terrain_agl_error_m'] for item in ds],
-                        label='Target AGL - rangefinder', color='tab:purple')
             err_ax.axhline(0.0, color='black', linewidth=0.7)
             err_ax.set_ylabel('Error (m)')
             err_ax.grid(True, alpha=0.3)
