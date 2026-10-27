@@ -166,10 +166,10 @@ priest_dyn_node:
     horizon_seconds: 5.0
 
     num_samples: 50
-    num_batch: 70
+    num_batch: 100
     max_obstacles: 60
     reference_samples: 300
-    cem_iterations: 10
+    cem_iterations: 13
 
     v_max: 0.90
     v_min: 0.0
@@ -177,8 +177,8 @@ priest_dyn_node:
     v_des: 0.55
     weight_smoothness: 1.0
     weight_track: 0.001
-    robot_radius: 0.10
-    safety_margin: 0.10
+    robot_radius: 0.25
+    safety_margin: 0.20
     goal_clearance: 0.08
     goal_lateral_weight: 0.0
 
@@ -191,7 +191,7 @@ priest_dyn_node:
     seed: 0
 
     is_log_CEM_progress: True
-    use_safety: false
+    use_safety: true
 
     # Pada WAIT_ORBIT, PRIEST mengikuti reference Path lingkaran dari bridge.
     # State lain memakai linear_goal dari FSM.
