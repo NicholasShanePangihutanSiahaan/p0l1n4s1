@@ -17,6 +17,7 @@ class BasicOrbitMission(BaseMissionStrategy):
         return (
             'POST_TAKEOFF_HOVER',
             'EXPLORE_ROW', 'ALIGN_TO_TREE', 'APPROACH_TREE', 'VERIFY_TREE', 'START_ORBIT', 
+            'PRE_ORBIT_ALTITUDE', 'RESTORE_FLIGHT_ALTITUDE',
             'WAIT_ORBIT', 'POST_ORBIT_HOVER', 'ALIGN_HOME', 
             'END_OF_ROW',
             'CRAB_SCAN', 'RETURN_TO_HOME', 'HOME_HOVER', 'FINAL_SPIN'
@@ -70,6 +71,7 @@ class BasicOrbitMission(BaseMissionStrategy):
                     fsm.arm_delay_start = fsm.get_clock().now()
                 elapsed_ns = (fsm.get_clock().now() - fsm.arm_delay_start).nanoseconds
                 if elapsed_ns >= 350_000_000:
+                    fsm.home_altitude = float(fsm.current_pose.pose.position.z)
                     takeoff_msg = Float32(); takeoff_msg.data = fsm.flight_altitude
                     fsm.cmd_takeoff_pub.publish(takeoff_msg)
                     fsm.transition("WAIT_TAKEOFF")
@@ -88,7 +90,10 @@ class BasicOrbitMission(BaseMissionStrategy):
                 fsm.hold_x = cx
                 fsm.hold_y = cy
                 fsm.hold_yaw = fsm.takeoff_yaw
-                fsm.navigation_altitude = fsm.current_pose.pose.position.z
+                fsm.navigation_altitude = (
+                    fsm.flight_altitude if fsm.altitude_mode == 'terrain_following'
+                    else fsm.current_pose.pose.position.z)
+                fsm.takeoff_navigation_altitude = float(fsm.navigation_altitude)
                 fsm.last_tree_x = cx
                 fsm.last_tree_y = cy
                 fsm.transition("POST_TAKEOFF_HOVER")
@@ -177,9 +182,17 @@ class BasicOrbitMission(BaseMissionStrategy):
                         update_msg.inspected = target_matched_tree.inspected
                         update_msg.validated = True
                         update_msg.orbit_count = target_matched_tree.orbit_count
-                        fsm.tree_update_pub.publish(update_msg)
-                        fsm.transition("START_ORBIT")
-                        fsm.get_logger().info(f"Verifikasi sukses! Pohon ID:{target_matched_tree.id} valid. Memulai orbit.")
+                        if not fsm.is_virtual_tree(target_matched_tree):
+                            fsm.tree_update_pub.publish(update_msg)
+                        fsm.hold_x, fsm.hold_y = cx, cy
+                        fsm.hold_yaw = target_yaw
+                        fsm.navigation_altitude = (
+                            fsm.pre_orbit_altitude if fsm.altitude_mode == 'terrain_following'
+                            else fsm.home_altitude + fsm.pre_orbit_altitude)
+                        fsm.transition("PRE_ORBIT_ALTITUDE")
+                        fsm.get_logger().info(
+                            f"Pohon valid. Menuju altitude pra-orbit "
+                            f"{fsm.pre_orbit_altitude:.2f} m (mode={fsm.altitude_mode}).")
                     else:
                         fsm.verification_retries += 1
                         if fsm.verification_retries <= fsm.verification_retry_limit:
@@ -208,6 +221,23 @@ class BasicOrbitMission(BaseMissionStrategy):
                     fsm.target_tree = None
                     fsm.transition("EXPLORE_ROW")
 
+        elif fsm.state in ("PRE_ORBIT_ALTITUDE", "RESTORE_FLIGHT_ALTITUDE"):
+            # Hold XY while changing local Z to the mission target.
+            fsm.publish_goal(fsm.hold_x, fsm.hold_y, fsm.hold_yaw)
+            error = fsm.navigation_altitude_error()
+            if error <= fsm.altitude_transition_tolerance:
+                now = fsm.get_clock().now()
+                if fsm.altitude_reached_since is None:
+                    fsm.altitude_reached_since = now
+                held = (now - fsm.altitude_reached_since).nanoseconds * 1e-9
+                if held >= fsm.altitude_transition_hold_time:
+                    if fsm.state == "PRE_ORBIT_ALTITUDE":
+                        fsm.transition("START_ORBIT")
+                    else:
+                        fsm.advance_after_tree()
+            else:
+                fsm.altitude_reached_since = None
+
         elif fsm.state == "START_ORBIT":
             # Jangan biarkan status ORBIT_COMPLETED dari pohon sebelumnya
             # menyelesaikan target baru sebelum controllernya mulai bergerak.
@@ -215,7 +245,9 @@ class BasicOrbitMission(BaseMissionStrategy):
             target_msg = Point()
             target_msg.x = fsm.target_tree.x
             target_msg.y = fsm.target_tree.y
-            target_msg.z = float(fsm.navigation_altitude)
+            target_msg.z = (float(fsm.current_pose.pose.position.z)
+                            if fsm.altitude_mode == 'terrain_following'
+                            else float(fsm.navigation_altitude))
             fsm.orbit_target_pub.publish(target_msg)
             
             start_msg = Bool(); start_msg.data = True
@@ -237,7 +269,8 @@ class BasicOrbitMission(BaseMissionStrategy):
                     update_msg.inspected = True 
                     update_msg.validated = True
                     update_msg.orbit_count = min(255, int(fsm.target_tree.orbit_count) + 1)
-                    fsm.tree_update_pub.publish(update_msg)
+                    if not fsm.is_virtual_tree(fsm.target_tree):
+                        fsm.tree_update_pub.publish(update_msg)
                     fsm.record_completed_tree(fsm.target_tree)
                     fsm.get_logger().info(f"Pohon ID:{fsm.target_tree.id} ditandai SELESAI.")
 
@@ -258,7 +291,8 @@ class BasicOrbitMission(BaseMissionStrategy):
             required_ticks = int(MissionConfig.POST_ORBIT_HOVER_TIME / 0.1)
             if fsm.hover_timer >= required_ticks:
                 fsm.hover_timer = 0
-                fsm.advance_after_tree()
+                fsm.navigation_altitude = fsm.takeoff_navigation_altitude
+                fsm.transition("RESTORE_FLIGHT_ALTITUDE")
 
         elif fsm.state == "ALIGN_HOME":
             fsm.done_receiving_flower_pose = False
