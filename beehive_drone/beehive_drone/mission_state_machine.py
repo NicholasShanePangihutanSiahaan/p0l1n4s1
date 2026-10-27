@@ -53,6 +53,12 @@ class MissionStateMachine(Node):
         self.end_of_farm_dist = MissionConfig.END_OF_FARM_DIST
         self.approach_safe_dist = MissionConfig.APPROACH_SAFE_DIST
         self.flight_altitude = MissionConfig.FLIGHT_ALTITUDE
+        self.declare_parameter('altitude_mode', 'home_relative')
+        self.altitude_mode = str(self.get_parameter('altitude_mode').value)
+        if self.altitude_mode not in ('home_relative', 'terrain_following'):
+            raise ValueError('altitude_mode harus home_relative atau terrain_following')
+        self.measured_agl = None
+        self.measured_agl_time = None
         self.declare_parameter('flight_altitude', self.flight_altitude)
         self.declare_parameter('pre_orbit_altitude', self.flight_altitude)
         self.declare_parameter('altitude_transition_tolerance', 0.15)
@@ -256,6 +262,8 @@ class MissionStateMachine(Node):
         self.fsm_status_pub = self.create_publisher(String, "/mission/fsm_state", 10)
         # Publisher untuk memperbarui status pohon ke Tree Mapper
         self.tree_update_pub = self.create_publisher(Tree, "/map/tree_update", 10)
+        self.agl_target_pub = self.create_publisher(Float32, '/control/target_agl', 10)
+        self.create_subscription(Float32, '/control/measured_agl', self.agl_cb, 10)
         self.setpoint_enable_pub = self.create_publisher(Bool, '/control/setpoint_enabled', 10)
 
         # Timer FSM berjalan pada 10 Hz
@@ -263,6 +271,21 @@ class MissionStateMachine(Node):
         self.get_logger().info("Mission State Machine (The Brain) Siap!")
 
     # --- Callbacks Sensor & Status ---
+    def agl_cb(self, msg):
+        if math.isfinite(msg.data) and msg.data > 0.0:
+            self.measured_agl = float(msg.data)
+            self.measured_agl_time = self.get_clock().now()
+
+    def navigation_altitude_error(self):
+        if self.altitude_mode == 'terrain_following':
+            if self.measured_agl_time is None:
+                return math.inf
+            age = (self.get_clock().now() - self.measured_agl_time).nanoseconds * 1e-9
+            if age > 0.5:
+                return math.inf
+            return abs(self.measured_agl - self.navigation_altitude)
+        return abs(float(self.current_pose.pose.position.z) - self.navigation_altitude)
+
     def pose_cb(self, msg):
         self.current_pose = msg
         self.last_pose_time = self.get_clock().now()
@@ -483,8 +506,10 @@ class MissionStateMachine(Node):
         # flight_altitude adalah tinggi terhadap home untuk CommandTOL. Setelah
         # takeoff, pertahankan koordinat Z lokal yang benar-benar dicapai FC.
         goal.pose.position.z = (
-            self.navigation_altitude
-            if self.navigation_altitude is not None else self.flight_altitude
+            float(self.current_pose.pose.position.z)
+            if self.altitude_mode == 'terrain_following' else
+            (self.navigation_altitude
+             if self.navigation_altitude is not None else self.flight_altitude)
         )
         
         qx, qy, qz, qw = self.euler_to_quaternion(0, 0, yaw)
@@ -504,6 +529,11 @@ class MissionStateMachine(Node):
 
         active = self.state not in ('WAIT_START', 'DONE', 'ABORT', 'MANUAL_OVERRIDE', 'MANUAL_SPRAY')
         self.publish_setpoint_enabled(self.state in self.mission_strategy.navigation_states)
+        if (self.altitude_mode == 'terrain_following'
+                and self.navigation_altitude is not None):
+            agl = Float32()
+            agl.data = float(self.navigation_altitude)
+            self.agl_target_pub.publish(agl)
         pose_age = float('inf') if self.last_pose_time is None else \
             (self.get_clock().now() - self.last_pose_time).nanoseconds * 1e-9
         if active and pose_age > self.pose_timeout:
