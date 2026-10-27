@@ -48,7 +48,6 @@ def generate_launch_description():
             output='screen'),
         Node(
             package='beehive_drone', executable='position_setpoint_controller',
-            parameters=[{'terrain_following_enabled': False}],
             output='screen'),
         Node(
             package='beehive_drone', executable='orbit_only_test_fsm',

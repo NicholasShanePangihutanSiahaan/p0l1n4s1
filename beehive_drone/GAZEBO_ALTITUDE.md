@@ -6,7 +6,7 @@ yang sudah tersedia di `/home/shane/ProjekAtaka/gazebo_sim`.
 
 `config/sim.yaml` sama dengan real untuk altitude: X (`flight_altitude`) = 1.9 m,
 Y (`pre_orbit_altitude`) = 2.0 m terhadap home, toleransi 0.15 m selama 1.5 detik.
-Terrain-following nonaktif; `desired_agl` tidak mengubah target. Untuk melihat
+Controller mengikuti target Z dari FSM. Untuk melihat
 perubahan lebih jelas, boleh ubah X ke 1.5 dan Y ke 2.0 sebelum build; samakan
 `mission_analyzer.expected_takeoff_altitude` dengan X.
 
@@ -76,13 +76,12 @@ ros2 topic echo --once /mavros/state
 ros2 topic echo --once /simulation/local_position/pose
 ros2 topic echo --once /simulation/rangefinder
 ros2 topic echo --once /map/trees
-ros2 param get /position_setpoint_controller terrain_following_enabled
 ros2 param get /mission_state_machine pre_orbit_altitude
 ros2 topic pub --once /mission/start std_msgs/msg/Bool '{data: true}'
 ```
 
 Tunggu MAVROS `connected: true`, pose/range valid, dan pohon terpetakan.
-Terrain-following harus `false`, Y harus `2.0`.
+Y harus `2.0`.
 
 ## 7. Amati fase altitude
 
@@ -105,3 +104,21 @@ Urutan yang diharapkan:
 
 Bandingkan Z terhadap home Z; angka Z absolut tidak harus sama dengan X/Y.
 Laporan analyzer disimpan di `~/beehive_mission_reports/sim`.
+
+## Memilih mode terrain
+
+Ubah `altitude_mode` di blok `/**/ros__parameters` pada `config/sim.yaml`
+menjadi `terrain_following`, build ulang, lalu restart launch misi. Untuk
+perilaku semula gunakan `home_relative`. Verifikasi kedua node memakai mode
+yang sama:
+
+```bash
+ros2 param get /mission_state_machine altitude_mode
+ros2 param get /position_setpoint_controller altitude_mode
+ros2 topic echo /control/target_agl
+ros2 topic echo /control/measured_agl
+```
+
+Mode terrain menggunakan X/Y sebagai AGL; mode home_relative menggunakan
+referensi home. Hindari restart FSM ketika drone masih melayang karena home
+baru akan direkam dari posisi itu.

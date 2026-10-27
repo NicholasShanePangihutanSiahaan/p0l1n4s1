@@ -17,14 +17,16 @@ class Stamp:
 
 def altitude_fsm(state):
     clock = SimpleNamespace(now=Mock(return_value=Stamp(0)))
-    return SimpleNamespace(
-        state=state, hold_x=3.0, hold_y=4.0, hold_yaw=0.5,
+    result = SimpleNamespace(
+        state=state, altitude_mode='home_relative', hold_x=3.0, hold_y=4.0, hold_yaw=0.5,
         navigation_altitude=12.0, altitude_transition_tolerance=0.15,
         altitude_transition_hold_time=1.5, altitude_reached_since=None,
         current_pose=SimpleNamespace(pose=SimpleNamespace(
             position=SimpleNamespace(z=12.0))),
         publish_goal=Mock(), transition=Mock(), advance_after_tree=Mock(),
         get_clock=lambda: clock, clock=clock)
+    result.navigation_altitude_error = lambda: abs(result.current_pose.pose.position.z - result.navigation_altitude)
+    return result
 
 
 @pytest.mark.parametrize('state', ['PRE_ORBIT_ALTITUDE', 'RESTORE_FLIGHT_ALTITUDE'])

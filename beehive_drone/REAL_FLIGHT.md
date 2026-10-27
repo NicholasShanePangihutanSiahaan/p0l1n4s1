@@ -16,28 +16,24 @@ ke `map` menggunakan pose ZED. Keluaran `/global_cylinders` tetap sama sehingga
 
 Konfigurasi misi utama saat ini adalah:
 
-- target takeoff dan terrain-follow AGL: 1.5 m,
+- target takeoff ditentukan oleh `flight_altitude`,
 - titik approach: 1.5 m secara horizontal dari pusat batang,
 - radius orbit: 1.5 m,
 - hover sesudah takeoff: 2 detik.
 
-## Arsitektur altitude dan terrain following
+## Arsitektur altitude
 
 - Pixhawk/EKF menyediakan posisi lokal yang stabil untuk navigasi XY dan Z.
 - Rangefinder bawah menyediakan tinggi AGL (jarak drone terhadap permukaan).
-- `position_setpoint_controller` mengubah target Z lokal secara perlahan agar
-  `desired_agl` tetap tercapai ketika tanah naik atau turun.
-- Rangefinder tidak menggantikan seluruh local pose. Target yang dikirim ke
-  MAVROS tetap `PoseStamped` dalam frame `map`; koreksinya adalah
-  `Z_target = Z_local + (desired_agl - range_terfilter)`.
-- Jika rangefinder stale/tidak valid, controller menahan setpoint terakhir dan
-  tidak melanjutkan XY selama `hold_position_on_range_loss: true`. Ia tidak
-  menebak ketinggian tanah.
+- `position_setpoint_controller` mengikuti target Z lokal dari FSM dengan
+  pembatas langkah vertikal untuk menghaluskan perubahan target.
+- Pada mode home_relative, Z berasal langsung dari FSM. Pada mode
+  terrain_following, FSM memberikan target AGL dan rangefinder mengoreksi Z.
+  Target misi yang stale membuat controller menahan posisi.
 
 Konfigurasi utama ada di blok `position_setpoint_controller` pada
-`config/real.yaml`. `flight_manager.altitude_source: rangefinder` hanya
-menentukan gate selesai takeoff/hover, sedangkan terrain following berlangsung
-di controller setpoint selama approach, orbit, dan kembali ke home.
+`config/real.yaml`. `flight_manager.altitude_source: rangefinder` menentukan
+gate selesai takeoff/hover secara terpisah; gate ini tidak diubah.
 
 ## Kalibrasi yang wajib
 
@@ -75,7 +71,7 @@ di controller setpoint selama approach, orbit, dan kembali ke home.
 7. Untuk konfigurasi EKF, gunakan Barometer sebagai sumber POSZ utama dan
    ExternalNav/Vision untuk posisi horizontal sesuai konfigurasi kendaraan.
    Rangefinder digunakan sebagai pengukuran AGL oleh program; jangan memilih
-   RangeFinder sebagai sumber EKF POSZ hanya karena terrain following aktif.
+   RangeFinder sebagai sumber EKF POSZ hanya karena dipakai untuk gate takeoff.
 
 ## Pemeriksaan tanpa propeller
 
@@ -87,14 +83,7 @@ ros2 topic echo /mavros/statustext/recv
 ```
 
 Angkat dan turunkan drone secara manual. Rangefinder harus berubah sesuai jarak
-ke tanah, local pose tidak boleh melompat, dan setelah mission launch dengan
-`auto_start:=false` status terrain harus `TRACKING`:
-
-```bash
-ros2 topic echo /control/terrain/status
-ros2 topic echo /control/terrain/measured_agl
-ros2 topic echo /control/terrain/target_z
-```
+ke tanah dan local pose tidak boleh melompat.
 
 ## Menjalankan dalam urutan yang benar
 
@@ -268,8 +257,6 @@ ros2 bag record -o ~/beehive_bags/mission_$(date +%Y%m%d_%H%M%S) \
   /zed/zed_node/pose /zed/zed_node/obj_det/objects \
   /perception/bb/cylinders /global_cylinders /map/trees \
   /mission/fsm_state \
-  /control/terrain/measured_agl /control/terrain/agl_error \
-  /control/terrain/target_z /control/terrain/status \
   /mavros/setpoint_position/local
 ```
 
@@ -280,12 +267,12 @@ media penyimpanan dan bandwidth Jetson mencukupi.
 
 ### Altitude per fase pada basic_orbit dan virtual_tree_test
 
-Konfigurasi real memakai `terrain_following_enabled: false`. `flight_altitude`
+`flight_altitude`
 adalah X untuk perintah takeoff. Z lokal saat konfirmasi takeoff disimpan dan
 menjadi target sampai hover/verifikasi setelah approach selesai, seperti alur
 sebelumnya. `pre_orbit_altitude` adalah Y dalam meter terhadap home; home Z lokal
 direkam tepat sebelum perintah takeoff. Target pra-orbit = home Z + Y, bukan AGL
-atau nilai `desired_agl`.
+
 
 Setelah verifikasi pohon, `PRE_ORBIT_ALTITUDE` menahan XY dan mengubah target Z.
 Orbit dimulai setelah error Z berada dalam `altitude_transition_tolerance`
@@ -297,5 +284,40 @@ atau melanjutkan ke pohon berikutnya. Kedua state memakai timeout/safety misi.
 
 Contoh: `flight_altitude: 1.5`, `pre_orbit_altitude: 2.0`,
 `altitude_transition_tolerance: 0.15`, `altitude_transition_hold_time: 1.5`.
-Alur ini memerlukan terrain-following tetap nonaktif agar target home tidak
-digantikan koreksi AGL.
+Penjelasan target terhadap home di bagian ini berlaku untuk mode home_relative.
+
+### Dua mode altitude
+
+Pilih `altitude_mode` di blok `/**/ros__parameters` pada `config/real.yaml`
+atau `config/sim.yaml`. Satu nilai dipakai FSM dan controller posisi:
+
+- `home_relative` (default): alur X → Y → X terhadap home seperti sebelumnya.
+  Approach mempertahankan Z lokal yang dicapai setelah takeoff. Pra-orbit menuju
+  home Z + Y, kemudian kembali ke Z hasil takeoff setelah orbit.
+- `terrain_following`: X (`flight_altitude`) dan Y (`pre_orbit_altitude`)
+  menjadi target AGL per fase. FSM mengirim `/control/target_agl` terus-menerus,
+  termasuk selama orbit. Controller mengoreksi Z lokal dari AGL terfilter,
+  dengan koreksi kemiringan, median, smoothing, dan batas laju target Z.
+  Pra-orbit/restore menunggu AGL, bukan Z lokal. Orbit tetap berjalan tanpa
+  gate altitude tambahan, tetapi koreksi terrain terus aktif.
+
+Tidak ada parameter `desired_agl` terpisah. `/control/measured_agl` menyediakan
+AGL terfilter. Pada range/target AGL yang stale, controller membekukan setpoint
+posisi; gate altitude tidak menganggap data stale sebagai keberhasilan.
+Gate takeoff `flight_manager.altitude_source` tetap terpisah. Landing tetap
+menggunakan perintah autopilot. Mode dipilih sebelum launch; restart semua
+node misi setelah mengubah mode. Untuk alur ini gunakan `basic_orbit` atau
+`virtual_tree_test`.
+
+Contoh konfigurasi (home_relative dapat diganti terrain_following):
+
+```yaml
+/**:
+  ros__parameters:
+    altitude_mode: terrain_following
+```
+
+Pada mode terrain, `flight_altitude: 1.5` dan `pre_orbit_altitude: 2.0`
+berarti takeoff/approach 1.5 m AGL, orbit 2.0 m AGL, lalu kembali 1.5 m AGL.
+Rangefinder bawah hanya melihat permukaan di bawah drone, sehingga kecepatan
+horizontal harus sesuai kemampuan vertikal mengikuti lereng.
