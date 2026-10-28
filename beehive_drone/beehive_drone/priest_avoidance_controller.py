@@ -46,23 +46,68 @@ def build_orbit_reference_path(center, current_pose, radius, point_count,
     return path
 
 
-def select_lookahead_pose(path, current_pose, lookahead):
-    """Return the first path pose at least ``lookahead`` metres from the UAV."""
+def select_lookahead_pose(path, current_pose, lookahead, progress=0.0):
+    """Return (target, progress) using projection and forward arc length.
+
+    Progress belongs to this path only and must reset when its geometry changes.
+    Equal-distance projections prefer the earlier segment to avoid skipping ahead
+    at a crossing. This geometric selector does not validate obstacle clearance.
+    """
     if path is None or not path.poses:
-        return None
-    cx = float(current_pose.position.x)
-    cy = float(current_pose.position.y)
-    cz = float(current_pose.position.z)
-    for stamped in path.poses:
-        point = stamped.pose.position
-        distance = math.sqrt(
-            (float(point.x) - cx) ** 2
-            + (float(point.y) - cy) ** 2
-            + (float(point.z) - cz) ** 2
-        )
-        if distance >= lookahead:
-            return stamped.pose
-    return path.poses[-1].pose
+        return None, 0.0
+
+    def xyz(pose):
+        return (float(pose.position.x), float(pose.position.y),
+                float(pose.position.z))
+
+    points = [xyz(stamped.pose) for stamped in path.poses]
+    current = xyz(current_pose)
+    if not all(math.isfinite(value) for point in points + [current]
+               for value in point):
+        return None, 0.0
+
+    # Accumulate actual 3D distance, including vertical path motion.
+    lengths = [math.dist(first, second)
+               for first, second in zip(points, points[1:])]
+    total = sum(lengths)
+    progress = min(max(0.0, progress), total)
+    best_distance_sq = math.inf
+    projected_progress = progress
+    segment_start = 0.0
+
+    for index, length in enumerate(lengths):
+        segment_end = segment_start + length
+        if length > 1.0e-9 and segment_end >= progress:
+            first, second = points[index], points[index + 1]
+            direction = tuple(b - a for a, b in zip(first, second))
+            fraction = sum((c - a) * d for c, a, d
+                           in zip(current, first, direction)) / (length * length)
+            # Restrict projection to the untraveled portion of this path.
+            minimum = max(0.0, (progress - segment_start) / length)
+            fraction = min(1.0, max(minimum, fraction))
+            projected = tuple(a + fraction * d
+                              for a, d in zip(first, direction))
+            distance_sq = sum((c - q) ** 2
+                              for c, q in zip(current, projected))
+            if distance_sq < best_distance_sq - 1.0e-12:
+                best_distance_sq = distance_sq
+                projected_progress = segment_start + fraction * length
+        segment_start = segment_end
+
+    target_distance = min(total, projected_progress + max(0.0, lookahead))
+    segment_start = 0.0
+    for index, length in enumerate(lengths):
+        if length > 1.0e-9 and target_distance <= segment_start + length:
+            fraction = (target_distance - segment_start) / length
+            target = deepcopy(path.poses[index + 1].pose)
+            first, second = points[index], points[index + 1]
+            target.position.x, target.position.y, target.position.z = (
+                a + fraction * (b - a) for a, b in zip(first, second))
+            # Mission yaw is applied by control_loop after selection.
+            return target, projected_progress
+        segment_start += length
+
+    return deepcopy(path.poses[-1].pose), projected_progress
 
 
 def cylinder_to_ellipsoid(tracked, minimum_radius, minimum_half_height):
@@ -100,7 +145,7 @@ class PriestAvoidanceController(Node):
     def __init__(self):
         super().__init__('priest_avoidance_controller')
         self.declare_parameter('publish_rate', 20.0)
-        self.declare_parameter('path_timeout', 2.0)
+        self.declare_parameter('path_timeout', 5.0)
         self.declare_parameter('waypoint_lookahead', 0.60)
         self.declare_parameter('goal_republish_period', 0.50)
         self.declare_parameter('minimum_obstacle_radius', 0.10)
@@ -130,6 +175,8 @@ class PriestAvoidanceController(Node):
         self.fsm_state = 'INIT'
         self.path = None
         self.path_received_at = None
+        self.path_progress = 0.0
+        self.path_geometry = None
         self.last_goal_sent_at = 0.0
         self.last_goal_xyz = None
         self.last_reference_sent_at = 0.0
@@ -196,11 +243,19 @@ class PriestAvoidanceController(Node):
         if message.data != self.fsm_state:
             self.path = None
             self.path_received_at = None
+            self.path_progress = 0.0
+            self.path_geometry = None
             if message.data in ORBIT_PATH_STATES:
                 self.orbit_reference = None
         self.fsm_state = message.data
 
     def path_callback(self, message):
+        geometry = tuple((p.pose.position.x, p.pose.position.y, p.pose.position.z)
+                         for p in message.poses)
+        identity = (message.header.frame_id, geometry)
+        if not message.poses or identity != self.path_geometry:
+            self.path_progress = 0.0
+        self.path_geometry = identity if message.poses else None
         self.path = message if message.poses else None
         self.path_received_at = time.monotonic()
 
@@ -260,8 +315,10 @@ class PriestAvoidanceController(Node):
         )
         if not path_fresh:
             return None
-        return select_lookahead_pose(
-            self.path, self.current_pose.pose, self.lookahead)
+        selected, self.path_progress = select_lookahead_pose(
+            self.path, self.current_pose.pose, self.lookahead,
+            self.path_progress)
+        return selected
 
     def control_loop(self):
         if self.current_pose is None:

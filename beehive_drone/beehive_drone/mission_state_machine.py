@@ -56,7 +56,16 @@ class MissionStateMachine(Node):
         self.end_of_farm_dist = MissionConfig.END_OF_FARM_DIST
         self.approach_safe_dist = MissionConfig.APPROACH_SAFE_DIST
         self.flight_altitude = MissionConfig.FLIGHT_ALTITUDE
+        self.declare_parameter('altitude_mode', 'home_relative')
+        self.altitude_mode = str(self.get_parameter('altitude_mode').value)
+        if self.altitude_mode not in ('home_relative', 'terrain_following'):
+            raise ValueError('altitude_mode harus home_relative atau terrain_following')
+        self.measured_agl = None
+        self.measured_agl_time = None
         self.declare_parameter('flight_altitude', self.flight_altitude)
+        self.declare_parameter('pre_orbit_altitude', self.flight_altitude)
+        self.declare_parameter('altitude_transition_tolerance', 0.15)
+        self.declare_parameter('altitude_transition_hold_time', 1.5)
         self.declare_parameter('approach_distance', self.approach_safe_dist)
         self.declare_parameter('tree_distance_tolerance', 0.5)
         self.declare_parameter('approach_goal_tolerance', 0.15)
@@ -68,6 +77,12 @@ class MissionStateMachine(Node):
         self.declare_parameter('mission_mode', 'single_tree')
         self.declare_parameter('orbit_radius', 3.0)
         self.declare_parameter('max_trees', 0)
+        self.declare_parameter('require_tree_ahead', True)
+        self.declare_parameter('virtual_tree_position_mode', 'home_relative')
+        self.declare_parameter('virtual_tree_position_x', 6.0)
+        self.declare_parameter('virtual_tree_position_y', 3.0)
+        self.declare_parameter('virtual_tree_offset_toward_home', 6.0)
+        self.declare_parameter('virtual_tree_id', 9001)
         self.declare_parameter('post_takeoff_hover_time', 2.0)
         self.declare_parameter('alt_target_flower', 2.5)
         self.declare_parameter('require_vision_before_start', False)
@@ -83,6 +98,16 @@ class MissionStateMachine(Node):
         self.declare_parameter('runtime_mission_mode', '')
         self.declare_parameter('runtime_max_trees', -1)
         self.flight_altitude = float(self.get_parameter('flight_altitude').value)
+        self.pre_orbit_altitude = float(self.get_parameter('pre_orbit_altitude').value)
+        self.altitude_transition_tolerance = float(
+            self.get_parameter('altitude_transition_tolerance').value)
+        self.altitude_transition_hold_time = float(
+            self.get_parameter('altitude_transition_hold_time').value)
+        if (not all(math.isfinite(value) and value > 0.0 for value in (
+                self.pre_orbit_altitude, self.altitude_transition_tolerance))
+                or not math.isfinite(self.altitude_transition_hold_time)
+                or self.altitude_transition_hold_time < 0.0):
+            raise ValueError('Parameter transisi altitude tidak valid')
         self.approach_safe_dist = float(
             self.get_parameter('approach_distance').value)
         self.tree_distance_tolerance = float(
@@ -129,6 +154,23 @@ class MissionStateMachine(Node):
         self.max_trees = max(0, (
             runtime_max_trees if runtime_max_trees >= 0
             else int(self.get_parameter('max_trees').value)))
+        self.require_tree_ahead = bool(
+            self.get_parameter('require_tree_ahead').value)
+        self.virtual_tree_position_mode = str(self.get_parameter(
+            'virtual_tree_position_mode').value).strip().lower()
+        if self.virtual_tree_position_mode not in (
+                'toward_home', 'home_relative', 'map'):
+            raise ValueError(
+                'virtual_tree_position_mode harus toward_home, '
+                'home_relative, atau map')
+        self.virtual_tree_position_x = float(self.get_parameter(
+            'virtual_tree_position_x').value)
+        self.virtual_tree_position_y = float(self.get_parameter(
+            'virtual_tree_position_y').value)
+        self.virtual_tree_offset_toward_home = max(0.1, float(
+            self.get_parameter('virtual_tree_offset_toward_home').value))
+        self.virtual_tree_id = int(
+            self.get_parameter('virtual_tree_id').value)
 
         # ==========================================
         # Variabel State & Navigasi
@@ -150,6 +192,9 @@ class MissionStateMachine(Node):
         self.hold_y = 0.0
         self.hold_yaw = 0.0
         self.navigation_altitude = None
+        self.takeoff_navigation_altitude = None
+        self.home_altitude = None
+        self.altitude_reached_since = None
         self.abort_command_sent = False
         self.last_landing_command_time = None
         self.trees = []
@@ -231,6 +276,8 @@ class MissionStateMachine(Node):
         self.fsm_status_pub = self.create_publisher(String, "/mission/fsm_state", 10)
         # Publisher untuk memperbarui status pohon ke Tree Mapper
         self.tree_update_pub = self.create_publisher(Tree, "/map/tree_update", 10)
+        self.agl_target_pub = self.create_publisher(Float32, '/control/target_agl', 10)
+        self.create_subscription(Float32, '/control/measured_agl', self.agl_cb, 10)
         self.setpoint_enable_pub = self.create_publisher(Bool, '/control/setpoint_enabled', 10)
 
         # Timer FSM berjalan pada 10 Hz
@@ -238,6 +285,21 @@ class MissionStateMachine(Node):
         self.get_logger().info("Mission State Machine (The Brain) Siap!")
 
     # --- Callbacks Sensor & Status ---
+    def agl_cb(self, msg):
+        if math.isfinite(msg.data) and msg.data > 0.0:
+            self.measured_agl = float(msg.data)
+            self.measured_agl_time = self.get_clock().now()
+
+    def navigation_altitude_error(self):
+        if self.altitude_mode == 'terrain_following':
+            if self.measured_agl_time is None:
+                return math.inf
+            age = (self.get_clock().now() - self.measured_agl_time).nanoseconds * 1e-9
+            if age > 0.5:
+                return math.inf
+            return abs(self.measured_agl - self.navigation_altitude)
+        return abs(float(self.current_pose.pose.position.z) - self.navigation_altitude)
+
     def pose_cb(self, msg):
         self.current_pose = msg
         self.last_pose_time = self.get_clock().now()
@@ -250,7 +312,12 @@ class MissionStateMachine(Node):
                 self.quaternion_to_yaw(msg.pose.orientation)
             )
     def orbit_status_cb(self, msg): self.orbit_status = msg.data
-    def tree_cb(self, msg): self.trees = msg.trees
+    def tree_cb(self, msg):
+        trees = list(msg.trees)
+        decorate = getattr(self.mission_strategy, 'decorate_tree_map', None)
+        if decorate is not None:
+            trees = decorate(trees)
+        self.trees = trees
     def alignment_cb(self, msg): self.frame_alignment_ready = bool(msg.data)
     
     def sprayer_toggle(self, status:bool):
@@ -340,6 +407,7 @@ class MissionStateMachine(Node):
         self.previous_state = self.state
         self.state = state
         self.state_since = self.get_clock().now()
+        self.altitude_reached_since = None
         if state == 'ABORT':
             self.abort_command_sent = False
         if state == 'LANDING':
@@ -373,6 +441,23 @@ class MissionStateMachine(Node):
         self.completed_tree_ids.add(int(tree.id))
         self.last_tree_x = float(tree.x)
         self.last_tree_y = float(tree.y)
+        strategy = getattr(self, 'mission_strategy', None)
+        completed_hook = getattr(strategy, 'tree_completed', None)
+        if completed_hook is not None:
+            virtual = completed_hook(tree, self)
+            if virtual is not None:
+                decorate = getattr(
+                    self.mission_strategy, 'decorate_tree_map', None)
+                self.trees = decorate(self.trees)
+                self.get_logger().warning(
+                    'VIRTUAL TREE TEST aktif: pusat='
+                    f'({virtual.x:.2f}, {virtual.y:.2f}), '
+                    'target kedua bukan hasil AI.')
+
+    def is_virtual_tree(self, tree):
+        strategy = getattr(self, 'mission_strategy', None)
+        check = getattr(strategy, 'is_virtual', None)
+        return bool(check is not None and check(tree, self))
 
     def advance_after_tree(self):
         """Continue exploring, or return home after reaching the tree limit."""
@@ -414,8 +499,13 @@ class MissionStateMachine(Node):
             if (not tree.inspected and
                     int(tree.id) not in self.completed_tree_ids):
                 dist = self.distance(cx, cy, tree.x, tree.y)
-                is_ahead = (tree.x - cx) * self.explore_dir_x >= -1.0
-                if is_ahead and dist < min_dist and dist < 15.0: 
+                is_virtual = MissionStateMachine.is_virtual_tree(self, tree)
+                require_tree_ahead = getattr(
+                    self, 'require_tree_ahead', True)
+                is_ahead = is_virtual or not require_tree_ahead or \
+                    (tree.x - cx) * self.explore_dir_x >= -1.0
+                within_range = is_virtual or dist < 15.0
+                if is_ahead and within_range and dist < min_dist:
                     min_dist = dist
                     best_tree = tree
         return best_tree
@@ -430,8 +520,10 @@ class MissionStateMachine(Node):
         # flight_altitude adalah tinggi terhadap home untuk CommandTOL. Setelah
         # takeoff, pertahankan koordinat Z lokal yang benar-benar dicapai FC.
         goal.pose.position.z = (
-            self.navigation_altitude
-            if self.navigation_altitude is not None else self.flight_altitude
+            float(self.current_pose.pose.position.z)
+            if self.altitude_mode == 'terrain_following' else
+            (self.navigation_altitude
+             if self.navigation_altitude is not None else self.flight_altitude)
         )
         
         qx, qy, qz, qw = self.euler_to_quaternion(0, 0, yaw)
@@ -470,6 +562,11 @@ class MissionStateMachine(Node):
 
         active = self.state not in ('WAIT_START', 'DONE', 'ABORT', 'MANUAL_OVERRIDE', 'MANUAL_SPRAY')
         self.publish_setpoint_enabled(self.state in self.mission_strategy.navigation_states)
+        if (self.altitude_mode == 'terrain_following'
+                and self.navigation_altitude is not None):
+            agl = Float32()
+            agl.data = float(self.navigation_altitude)
+            self.agl_target_pub.publish(agl)
         pose_age = float('inf') if self.last_pose_time is None else \
             (self.get_clock().now() - self.last_pose_time).nanoseconds * 1e-9
         if active and pose_age > self.pose_timeout:

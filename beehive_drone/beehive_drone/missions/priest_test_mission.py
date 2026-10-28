@@ -106,7 +106,7 @@ class PriestTestMission(BaseMissionStrategy):
             target_goal_x = 15.0
             target_goal_y = 0.0
             yaw_target = fsm.takeoff_yaw
-            fsm.get_logger().info(f"Bergerak ke ({target_goal_x}, {target_goal_y}) dengan yaw {yaw_target}", throttle_duration_sec=1.0)
+            # fsm.get_logger().info(f"Bergerak ke ({target_goal_x}, {target_goal_y}) dengan yaw {yaw_target}", throttle_duration_sec=1.0)
 
             if fsm.distance(cx, cy, target_goal_x, target_goal_y) < 0.2:
                 fsm.transition("RETURN_TO_HOME")

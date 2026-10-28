@@ -13,6 +13,8 @@ def generate_launch_description():
     mission_launch = os.path.join(
         get_package_share_directory('beehive_drone'),
         'launch', 'real_mission.launch.py')
+    default_config = os.path.join(
+            get_package_share_directory('beehive_drone'), 'config', 'sim.yaml')
     return LaunchDescription([
         DeclareLaunchArgument('auto_start', default_value='false'),
         DeclareLaunchArgument('mission_type', default_value='basic_orbit'),
@@ -21,6 +23,11 @@ def generate_launch_description():
         DeclareLaunchArgument('altitude_source', default_value='local_position'),
         DeclareLaunchArgument(
             'enable_flower_detection', default_value='false'),
+        DeclareLaunchArgument(
+            'priest_delay', default_value='15.0',
+            description='Delay untuk JIT Compilation dari node PRIEST.')
+        ,
+        DeclareLaunchArgument('config_file', default_value=default_config),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(mission_launch),
             launch_arguments={
@@ -32,6 +39,8 @@ def generate_launch_description():
                 'enable_flower_detection':
                     LaunchConfiguration('enable_flower_detection'),
                 'record_data': 'false',
-                'altitude_source': LaunchConfiguration('altitude_source')
+                'altitude_source': LaunchConfiguration('altitude_source'),
+                'priest_delay': LaunchConfiguration('priest_delay'),
+                'config_file': LaunchConfiguration('config_file'),
             }.items()),
     ])

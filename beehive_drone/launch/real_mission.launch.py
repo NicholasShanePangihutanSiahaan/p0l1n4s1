@@ -67,6 +67,16 @@ def generate_launch_description():
             default_value='/home/palmbee1/DTETI-WS/data/'),
     ]
 
+    arguments.extend([
+        DeclareLaunchArgument('require_tree_ahead', default_value='true'),
+        DeclareLaunchArgument('virtual_tree_position_mode', default_value='home_relative',
+                              choices=['toward_home', 'home_relative', 'map']),
+        DeclareLaunchArgument('virtual_tree_position_x', default_value='6.0'),
+        DeclareLaunchArgument('virtual_tree_position_y', default_value='3.0'),
+        DeclareLaunchArgument('virtual_tree_offset_toward_home', default_value='6.0'),
+        DeclareLaunchArgument('virtual_tree_id', default_value='9001'),
+    ])
+
     priest_node = [
         Node(
             package='priest_dyn_traj', executable='priest_dyn_node',
@@ -114,6 +124,17 @@ def generate_launch_description():
             package='beehive_drone', executable='mission_state_machine',
             parameters=[config, {
                 'runtime_auto_start': auto_start,
+                'require_tree_ahead': ParameterValue(
+                    LaunchConfiguration('require_tree_ahead'), value_type=bool),
+                'virtual_tree_position_mode': LaunchConfiguration('virtual_tree_position_mode'),
+                'virtual_tree_position_x': ParameterValue(
+                    LaunchConfiguration('virtual_tree_position_x'), value_type=float),
+                'virtual_tree_position_y': ParameterValue(
+                    LaunchConfiguration('virtual_tree_position_y'), value_type=float),
+                'virtual_tree_offset_toward_home': ParameterValue(
+                    LaunchConfiguration('virtual_tree_offset_toward_home'), value_type=float),
+                'virtual_tree_id': ParameterValue(
+                    LaunchConfiguration('virtual_tree_id'), value_type=int),
                 'runtime_mission_type': mission_type,
                 'runtime_mission_mode': mission_mode,
                 'runtime_max_trees': ParameterValue(
