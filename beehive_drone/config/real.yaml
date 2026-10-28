@@ -86,6 +86,7 @@ mission_state_machine:
     # Hanya dipakai dalam multi_tree; 0: tanpa batas jumlah pohon.
     max_trees: 0
     abort_mode: BRAKE
+    alt_target_flower: 2.5 # Target Altitude posisi bunga pada saat align flower
 
 dynamic_orbit_controller:
   ros__parameters:

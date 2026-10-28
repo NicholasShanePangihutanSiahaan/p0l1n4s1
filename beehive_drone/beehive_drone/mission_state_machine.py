@@ -69,6 +69,7 @@ class MissionStateMachine(Node):
         self.declare_parameter('orbit_radius', 3.0)
         self.declare_parameter('max_trees', 0)
         self.declare_parameter('post_takeoff_hover_time', 2.0)
+        self.declare_parameter('alt_target_flower', 2.5)
         self.declare_parameter('require_vision_before_start', False)
         self.declare_parameter(
             'vision_pose_topic', '/mavros/vision_pose/pose')
@@ -99,6 +100,7 @@ class MissionStateMachine(Node):
             str(self.get_parameter('runtime_mission_mode').value).strip()
             or str(self.get_parameter('mission_mode').value).strip()
         ).lower()
+        self.alt_increase_pose = float(self.get_parameter('alt_target_flower').value())
         if self.mission_mode not in ('single_tree', 'multi_tree'):
             raise ValueError(
                 "mission_mode harus 'single_tree' atau 'multi_tree'")
@@ -159,7 +161,6 @@ class MissionStateMachine(Node):
         self.last_vision_time = None
         self.last_vision_wait_log = None
         self.frame_alignment_ready = not self.require_frame_alignment
-        self.alt_increase_pose = 2.0
         # Variabel deteksi bunga
         self.receiving_flower_pose = False
         self.done_receiving_flower_pose = False # memastikan cuman sekali terima data flower untuk sekali orbit
@@ -389,7 +390,7 @@ class MissionStateMachine(Node):
             self.mission_mode == 'multi_tree' and
             self.max_trees > 0 and completed_count >= self.max_trees)
         if single_tree_done or tree_limit_reached:
-            self.transition("DECREASE_ALT")
+            self.transition("ALIGN_HOME")
             if single_tree_done:
                 self.get_logger().info(
                     "Mode single_tree selesai. Kembali ke home.")
@@ -398,7 +399,7 @@ class MissionStateMachine(Node):
                     f"Target {self.max_trees} pohon tercapai. Kembali ke home.")
             return
 
-        self.transition("DECREASE_ALT")
+        self.transition("EXPLORE_ROW")
         self.get_logger().info(
             f"Pohon selesai ({completed_count}). Mencari pohon berikutnya.")
 

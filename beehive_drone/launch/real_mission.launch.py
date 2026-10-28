@@ -39,7 +39,7 @@ def generate_launch_description():
             'priest_delay', default_value='10.0',
             description='Delay untuk JIT Compilation dari node PRIEST.'),
         DeclareLaunchArgument(
-            'max_trees', default_value='0',
+            'max_trees', default_value='1',
             description='Tree limit in multi_tree mode; 0 is unlimited.'),
         DeclareLaunchArgument(
             'use_priest', default_value='false',
