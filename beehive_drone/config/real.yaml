@@ -99,6 +99,7 @@ mission_state_machine:
     virtual_tree_offset_toward_home: 6.0
     virtual_tree_id: 9001
     abort_mode: BRAKE
+    alt_target_flower: 2.5 # Target Altitude posisi bunga pada saat align flower
 
 dynamic_orbit_controller:
   ros__parameters:
