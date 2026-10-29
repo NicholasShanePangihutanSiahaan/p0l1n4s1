@@ -18,7 +18,8 @@ from rclpy.qos import (
     DurabilityPolicy,
     qos_profile_sensor_data,
 )
-from geometry_msgs.msg import Pose, PoseStamped
+from geometry_msgs.msg import Point, Pose, PoseStamped
+from visualization_msgs.msg import Marker
 from std_msgs.msg import String
 from nav_msgs.msg import Odometry, Path
 from pcl_cstm_msg.msg import AxisAlignedElipsoidArray
@@ -99,6 +100,7 @@ class Planner:
                 maxiter_cem=cfg['cem_iterations'],
                 weight_smoothness=cfg['weight_smoothness'],
                 weight_track=cfg['weight_track'],
+                weight_clearance=cfg['weight_clearance'],
                 way_point_shape=cfg['reference_samples'],
                 v_des=cfg['v_des'],
                 goal_clearance=cfg['goal_clearance'],
@@ -155,13 +157,14 @@ class Planner:
         active = np.arange(n) < count
 
         self.key, key = random.split(self.key)
-        points, success, goal_corrected = self.optimizer.solve(
+        points, success, goal_corrected, elites = self.optimizer.solve(
             jax.device_put(np.asarray(state, dtype=np.float32), self.device),
             jax.device_put(np.asarray(reference, dtype=np.float32), self.device),
             jax.device_put(padded_centers, self.device),
             jax.device_put(padded_radii, self.device),
             jax.device_put(active, self.device),
             key,
+            return_elites=True,
         )
 
         # GPU dispatch is asynchronous. Warm-up is finished only after the
@@ -177,7 +180,9 @@ class Planner:
             )
         if self.cfg['use_safety'] and not collision_free(points, centers, radii):
             raise ValueError('Planner output intersects an inflated ellipsoid')
-        return points, bool(goal_corrected)
+        # Diagnostics travel with this result, never through mutable worker state.
+        elites = np.asarray(elites, dtype=float)
+        return points, bool(goal_corrected), elites
 
 
 class Priest3DNode(Node):
@@ -209,6 +214,9 @@ class Priest3DNode(Node):
             v_des=0.4,
             weight_smoothness=0.025,
             weight_track=0.5,
+            # Higher values favor more clearance; zero disables this preference.
+            # Fixed when the optimizer is constructed, before JIT warm-up.
+            weight_clearance=1.0,
             robot_radius=0.25,
             safety_margin=0.10,
             goal_clearance=0.08,
@@ -225,12 +233,27 @@ class Priest3DNode(Node):
             device='cpu',
             seed=0,
             use_safety=False,
+            publish_elite_trajectories=True,
+            elite_marker_alpha=0.20,
+            elite_marker_line_width=0.015,
         )
         self.cfg = {k: self.declare_parameter(k, v).value for k, v in defaults.items()}
         if not isinstance(self.cfg['use_safety'], bool):
             raise ValueError('use_safety must be a boolean')
         if not isinstance(self.cfg['is_log_CEM_progress'], bool):
             raise ValueError('is_log_CEM_progress must be a boolean')
+
+        if not isinstance(self.cfg['publish_elite_trajectories'], bool):
+            raise ValueError('publish_elite_trajectories must be a boolean')
+        if not 0.0 < self.cfg['elite_marker_alpha'] <= 1.0:
+            raise ValueError('elite_marker_alpha must be in (0, 1]')
+        if (not math.isfinite(self.cfg['elite_marker_line_width'])
+                or self.cfg['elite_marker_line_width'] <= 0.0):
+            raise ValueError('elite_marker_line_width must be finite and positive')
+
+        if (not math.isfinite(self.cfg['weight_clearance'])
+                or self.cfg['weight_clearance'] < 0.0):
+            raise ValueError('weight_clearance must be finite and nonnegative')
 
         configured_states = self.cfg['reference_trajectory_states']
         if (
@@ -316,6 +339,11 @@ class Priest3DNode(Node):
             '/navigation/priest/trajectory/out',
             reliable,
         )
+        self.elite_pub = self.create_publisher(
+            Marker,
+            '/navigation/priest/trajectory/elites',
+            reliable,
+        )
         self.create_subscription(
             Odometry,
             '/mavros/local_position/odom',
@@ -383,6 +411,7 @@ class Priest3DNode(Node):
             msg.header.frame_id = frame
             msg.header.stamp = self.get_clock().now().to_msg()
             self.pub.publish(msg)
+            self.publish_elites(None, frame)
             self.cleared = True
 
     # ------------------------------------------------------------------
@@ -679,7 +708,7 @@ class Priest3DNode(Node):
             if completed is not None:
                 _, started, _, solve_id, kept_count, dropped_count = self.job
                 try:
-                    _, goal_corrected = completed.result()
+                    _, goal_corrected, _ = completed.result()
                     self.cem_info(
                         f'CEM #{solve_id} finished in '
                         f'{(time.monotonic() - started) * 1000.0:.1f} ms, '
@@ -705,7 +734,7 @@ class Priest3DNode(Node):
             if completed is not None:
                 _, started, _, solve_id, kept_count, dropped_count = self.job
                 try:
-                    _, goal_corrected = completed.result()
+                    _, goal_corrected, _ = completed.result()
                     self.cem_info(
                         f'CEM #{solve_id} finished in '
                         f'{(time.monotonic() - started) * 1000.0:.1f} ms, '
@@ -727,7 +756,7 @@ class Priest3DNode(Node):
         # movement, and the latest obstacles before accepting the result.
         if completed is not None:
             try:
-                points, goal_corrected = completed.result()
+                points, goal_corrected, elites = completed.result()
                 (
                     revision,
                     started,
@@ -769,7 +798,8 @@ class Priest3DNode(Node):
                     )
                     self.warn('Discarded output that intersects the latest obstacles')
                 else:
-                    self.publish(points)
+                    self.publish(points, frame)
+                    self.publish_elites(elites, frame)
                     self.cem_info(
                         f'CEM #{solve_id} finished in {elapsed_ms:.1f} ms; '
                         f'published {len(points)} poses '
@@ -813,6 +843,47 @@ class Priest3DNode(Node):
                 centers.copy(),
                 radii.copy(),
             )
+
+    def publish_elites(self, trajectories, frame='map'):
+        """Publish up to 13 final-round elites in one transparent LINE_LIST.
+
+        These are optimizer diagnostics, not individually safety-approved paths.
+        One stable ID replaces the batch; an empty batch deletes the marker.
+        """
+        if not self.cfg['publish_elite_trajectories']:
+            return
+
+        marker = Marker()
+        marker.header.frame_id = frame or 'map'
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = 'priest_elites'
+        marker.id = 0
+        marker.type = Marker.LINE_LIST
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = float(self.cfg['elite_marker_line_width'])
+        marker.color.r = 0.0
+        marker.color.g = 0.8
+        marker.color.b = 1.0
+        marker.color.a = float(self.cfg['elite_marker_alpha'])
+        marker.lifetime = Duration(seconds=float(self.cfg['max_solve_age'])).to_msg()
+        marker.action = Marker.DELETE
+
+        if trajectories is not None:
+            for trajectory in trajectories[:13]:
+                if np.isfinite(trajectory).all():
+                    # LINE_LIST needs two points per segment, including shared
+                    # vertices. Each pair stays within the same trajectory.
+                    for start, end in zip(trajectory[:-1], trajectory[1:]):
+                        for sample in (start, end):
+                            marker.points.append(Point(
+                                x=float(sample[0]),
+                                y=float(sample[1]),
+                                z=float(sample[2]),
+                            ))
+            if marker.points:
+                marker.action = Marker.ADD
+
+        self.elite_pub.publish(marker)
 
     def publish(self, points, frame = 'map'):
         """Convert samples to a timed Path with yaw aligned to its XY tangent."""

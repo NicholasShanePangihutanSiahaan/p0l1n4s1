@@ -131,17 +131,23 @@ priest_dyn_node:
     horizon_seconds: 5.0
     num_samples: 50
     num_batch: 100
-    max_obstacles: 60
+    max_obstacles: 100
     reference_samples: 300
     cem_iterations: 13
+
+    # Visualisasi di rviz untuk trajectory
+    publish_elite_trajectories: true
+    elite_marker_alpha: 0.20
+    elite_marker_line_width: 0.015
 
     v_max: 0.90
     v_min: 0.0
     a_max: 1.3
     v_des: 0.55
-    weight_smoothness: 1.0
-    weight_track: 0.001
-    robot_radius: 0.25
+    weight_smoothness: 1.3 # Lebih tinggi prioritaskan lebih sedikit belokan
+    weight_track: 0.001 # Lebih tinggi prioritaskan mengikuti rute
+    weight_clearance: 1.7 # Lebih tingi prioritaskan mengihndari obstacle
+    robot_radius: 0.4
     safety_margin: 0.20
     goal_clearance: 0.08
     goal_lateral_weight: 0.0

@@ -54,6 +54,7 @@ class batch_crowd_nav_3d:
         v_des,
         goal_clearance=0.08,
         goal_lateral_weight=0.0,
+        weight_clearance=1.0,
     ):
         # Configuration is fixed for the lifetime of this compiled planner.
         self.goal_clearance = goal_clearance
@@ -63,6 +64,10 @@ class batch_crowd_nav_3d:
 
         self.weight_smoothness = weight_smoothness
         self.weight_track = weight_track
+        if not np.isfinite(weight_clearance) or weight_clearance < 0.0:
+            raise ValueError('weight_clearance must be finite and nonnegative')
+        # Startup-only weight for mean exp(-normalized nearest-boundary gap).
+        self.weight_clearance = weight_clearance
 
         self.v_des = v_des
         self.v_max = v_max
@@ -269,7 +274,7 @@ class batch_crowd_nav_3d:
     # Public compiled entry point. All changing arrays are explicit inputs.
     # =============================================================
 
-    @partial(jit, static_argnums=(0,))
+    @partial(jit, static_argnums=(0,), static_argnames=("return_elites",))
     def solve(
         self,
         initial_state,
@@ -278,8 +283,13 @@ class batch_crowd_nav_3d:
         obstacle_radii,
         obstacle_active,
         key,
+        *,
+        return_elites=False,
     ):
-        """Return (positions[num, 3], safe_goal_success) on the input device.
+        """Return (positions, safe_goal_success, goal_corrected) on the device.
+
+        With return_elites=True, append the 13 lowest-cost final-round elite
+        trajectories, shaped (13, num, 3). The default preserves existing callers.
 
         Call with fixed shapes/dtypes after one warm-up. This method does not
         mutate self, perform host transfers, or recreate the planner. It expects
@@ -338,11 +348,14 @@ class batch_crowd_nav_3d:
             obstacle_radii=radii,
             obstacle_active=active,
         )
-        return (
+        output = (
             jnp.stack(result[9:12], axis=1),
             success,
             goal_corrected,
         )
+        if return_elites:
+            return output + (result[18],)
+        return output
 
     # =============================================================
     # Reference path utilities
@@ -1647,12 +1660,12 @@ class batch_crowd_nav_3d:
             batch, self.num_obs * self.num
         )
 
-        violation = (
-            1.0
-            - (dx / a_obs_flat)**2
-            - (dy / b_obs_flat)**2
-            - (dz / c_obs_flat)**2
+        normalized_distance_sq = (
+            (dx / a_obs_flat)**2
+            + (dy / b_obs_flat)**2
+            + (dz / c_obs_flat)**2
         )
+        violation = 1.0 - normalized_distance_sq
 
         active_flat = jnp.repeat(obstacle_active, self.num)[None, :]
         cost_obs = jnp.linalg.norm(
@@ -1660,13 +1673,22 @@ class batch_crowd_nav_3d:
             axis=1,
         )
 
-        # Preserve the original clearance-style score over real obstacles only.
-        # Without this mask, padded slots would dominate trajectory ranking.
-        clearance_cost = jnp.where(
-            jnp.any(obstacle_active),
-            -jnp.min(jnp.where(active_flat, violation, jnp.inf), axis=1),
+        # Normalized radial gap from the inflated ellipsoid boundary:
+        # d=1 on the boundary; d>1 outside. This is dimensionless, not metres.
+        normalized_gap = jnp.maximum(
+            jnp.sqrt(jnp.maximum(normalized_distance_sq, 0.0)) - 1.0,
             0.0,
         )
+        gap_by_obstacle = normalized_gap.reshape(batch, self.num_obs, self.num)
+        nearest_gap = jnp.min(
+            jnp.where(obstacle_active[None, :, None], gap_by_obstacle, jnp.inf),
+            axis=1,
+        )
+        # Penalize proximity to the nearest obstacle at each time sample.
+        # Averaging avoids scaling with the sample/obstacle count. An empty
+        # active set gives exp(-inf)=0. Inside obstacles the separate penetration
+        # penalty above still applies, while this proximity penalty saturates.
+        clearance_cost = jnp.mean(jnp.exp(-nearest_gap), axis=1)
 
         acceleration_mag = jnp.sqrt(
             xddot**2 + yddot**2 + zddot**2
@@ -1693,7 +1715,7 @@ class batch_crowd_nav_3d:
             + self.weight_smoothness * cost_smoothness
             + self.weight_track * cost_track
             + 1.0 * cost_obs
-            + 1.0 * clearance_cost
+            + self.weight_clearance * clearance_cost
         )
 
     def comp_prod(self, diffs, d):
@@ -2080,6 +2102,11 @@ class batch_crowd_nav_3d:
             x_warm_next,
             y_warm_next,
             z_warm_next,
+            # Final-round elites ranked by the same cost as the selected path.
+            jnp.stack(
+                (x_elite[idx_sort[:13]], y_elite[idx_sort[:13]], z_elite[idx_sort[:13]]),
+                axis=-1,
+            ),
         )
 
     # =============================================================
