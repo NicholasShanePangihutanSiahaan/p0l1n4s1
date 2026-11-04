@@ -126,7 +126,7 @@ mission_analyzer:
 
 priest_dyn_node:
   ros__parameters:
-    plan_rate_hz: 0.333
+    plan_rate_hz: 3.0
     goal_tolerance: 0.15
     horizon_seconds: 5.0
     num_samples: 50
@@ -156,11 +156,11 @@ priest_dyn_node:
     max_solve_age: 30.0
     max_start_drift: 0.3
     require_obstacles: false
-    device: cpu
+    device: cuda
     seed: 0
 
     is_log_CEM_progress: True
-    use_safety: true
+    use_safety: false
 
     # Pada WAIT_ORBIT, PRIEST mengikuti reference Path lingkaran dari bridge.
     # State lain memakai linear_goal dari FSM.

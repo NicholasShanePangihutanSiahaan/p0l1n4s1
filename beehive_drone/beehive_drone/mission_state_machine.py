@@ -125,7 +125,7 @@ class MissionStateMachine(Node):
             str(self.get_parameter('runtime_mission_mode').value).strip()
             or str(self.get_parameter('mission_mode').value).strip()
         ).lower()
-        self.alt_increase_pose = float(self.get_parameter('alt_target_flower').value())
+        self.alt_increase_pose = float(self.get_parameter('alt_target_flower').value)
         if self.mission_mode not in ('single_tree', 'multi_tree'):
             raise ValueError(
                 "mission_mode harus 'single_tree' atau 'multi_tree'")

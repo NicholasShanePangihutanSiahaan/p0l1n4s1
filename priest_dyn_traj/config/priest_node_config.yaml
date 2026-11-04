@@ -1,40 +1,42 @@
 priest_dyn_node:
   ros__parameters:
-    plan_rate_hz: 7.0
+    plan_rate_hz: 10.0
     goal_tolerance: 0.15
-    horizon_seconds: 2.0
-
-    num_samples: 100
-    num_batch: 110
-    max_obstacles: 60
+    horizon_seconds: 5.0
+    num_samples: 50
+    num_batch: 100
+    max_obstacles: 100
     reference_samples: 300
     cem_iterations: 13
 
-    v_max: 0.90
+    # Visualisasi di rviz untuk trajectory
+    publish_elite_trajectories: true
+    elite_marker_alpha: 0.20
+    elite_marker_line_width: 0.015
+
+    v_max: 0.60
     v_min: 0.0
-    a_max: 1.30
+    a_max: 0.9
     v_des: 0.55
-    weight_smoothness: 1.0
-    weight_track: 0.001
-    robot_radius: 0.25
-    safety_margin: 0.10
+    weight_smoothness: 0.025 # Lebih tinggi prioritaskan lebih sedikit belokan
+    weight_track: 5.0 # Lebih tinggi prioritaskan mengikuti rute
+    weight_clearance: 0.1 # Lebih tinggi prioritaskan mengihndari obstacle
+    robot_radius: 0.1
+    safety_margin: 0.15
     goal_clearance: 0.08
     goal_lateral_weight: 0.0
-
-    odom_timeout: 1.0
-    obstacle_timeout: 2.0
+    odom_timeout: 20.0
+    obstacle_timeout: 20.0
     max_solve_age: 30.0
-    max_start_drift: 0.50
-    require_obstacles: True
-    device: 'cpu'
+    max_start_drift: 0.3
+    require_obstacles: false
+    device: cuda
     seed: 0
 
-    is_log_CEM_progress: True # Log atau tidak
+    is_log_CEM_progress: True
+    use_safety: false
 
-    # Nilai ini mempengaruhi apakah PRIEST memakai /navigation/priest/trajectory/in
-    # atau /navigation/priest/linear_goal
-    # Jika fsm_state berada pada 'reference_trajectory_states' maka dia akan memakai /navigation/priest/trajectory/in
-    # sebagai goal trajectory
-    reference_trajectory_states:
-      - 'WAIT_ORBIT'
+    # Pada WAIT_ORBIT, PRIEST mengikuti reference Path lingkaran dari bridge.
+    # State lain memakai linear_goal dari FSM.
+    reference_trajectory_states: ["WAIT_ORBIT"]
       
