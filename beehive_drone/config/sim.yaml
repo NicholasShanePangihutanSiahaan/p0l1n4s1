@@ -126,9 +126,9 @@ mission_analyzer:
 
 priest_dyn_node:
   ros__parameters:
-    plan_rate_hz: 3.0
+    plan_rate_hz: 1.0
     goal_tolerance: 0.15
-    horizon_seconds: 5.0
+    horizon_seconds: 2.0
     num_samples: 50
     num_batch: 100
     max_obstacles: 100
@@ -144,9 +144,9 @@ priest_dyn_node:
     v_min: 0.0
     a_max: 1.3
     v_des: 0.55
-    weight_smoothness: 1.3 # Lebih tinggi prioritaskan lebih sedikit belokan
-    weight_track: 0.001 # Lebih tinggi prioritaskan mengikuti rute
-    weight_clearance: 1.7 # Lebih tingi prioritaskan mengihndari obstacle
+    weight_smoothness: 0.025  # Lebih tinggi prioritaskan lebih sedikit belokan
+    weight_track: 5.0 # Lebih tinggi prioritaskan mengikuti rute
+    weight_clearance: 0.1 # Lebih tingi prioritaskan mengihndari obstacle
     robot_radius: 0.4
     safety_margin: 0.20
     goal_clearance: 0.08
