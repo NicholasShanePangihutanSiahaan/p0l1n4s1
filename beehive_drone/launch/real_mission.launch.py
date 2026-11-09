@@ -97,7 +97,7 @@ def generate_launch_description():
                 "--roll", "0.0",
                 "--pitch", "0.349",
                 "--yaw", "0.0",
-                "--frame-id", "zed_camera_link",
+                "--frame-id", "base_link",
                 "--child-frame-id", "livox_frame",
             ],
             output="screen",
