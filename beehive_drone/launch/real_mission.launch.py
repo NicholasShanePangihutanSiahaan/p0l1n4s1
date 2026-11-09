@@ -86,6 +86,38 @@ def generate_launch_description():
 
 
     nodes = [
+        Node( # Buat LIVOX
+            package="tf2_ros",
+            executable="static_transform_publisher",
+            name="base_to_livox_tf",
+            arguments=[
+                "--x", "0.0",
+                "--y", "0.0",
+                "--z", "0.0",
+                "--roll", "0.0",
+                "--pitch", "0.349",
+                "--yaw", "0.0",
+                "--frame-id", "zed_camera_link",
+                "--child-frame-id", "livox_frame",
+            ],
+            output="screen",
+        ),
+        Node( # Buat LIVOX
+            package="tf2_ros",
+            executable="static_transform_publisher",
+            name="base_to_livox_tf",
+            arguments=[
+                "--x", "0.0",
+                "--y", "0.0",
+                "--z", "0.0",
+                "--roll", "0.0",
+                "--pitch", "0.349",
+                "--yaw", "0.0",
+                "--frame-id", "zed_camera_link",
+                "--child-frame-id", "base_link",
+            ],
+            output="screen",
+        ),
         Node(
             package='beehive_drone', executable='tree_mapper',
             parameters=[config], output='screen'),
