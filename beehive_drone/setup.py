@@ -25,6 +25,7 @@ setup(
     license='TODO: License declaration',
     entry_points={
         'console_scripts': [
+            'lidar_tree_verifier = beehive_drone.lidar_tree_verifier:main',
             # DAFTARKAN SEMUA NODE DI SINI (nama_eksekusi = nama_folder.nama_file:main)
             'mission_state_machine = beehive_drone.mission_state_machine:main',
             'orbit_only_test_fsm = beehive_drone.orbit_only_test_fsm:main',

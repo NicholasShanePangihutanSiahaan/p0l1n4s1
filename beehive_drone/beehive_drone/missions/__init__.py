@@ -1,3 +1,4 @@
+from beehive_drone.missions.adaptive_orbit_mission import AdaptiveOrbitMission
 from beehive_drone.missions.manual_spray_mission import ManualSprayMission
 from beehive_drone.missions.basic_orbit import BasicOrbitMission
 from beehive_drone.missions.virtual_tree_test import VirtualTreeTestMission
@@ -9,6 +10,7 @@ from beehive_drone.missions.basic_orbit_alt_control_mission import BasicOrbitAlt
 
 # Dictionary mapping mission identifiers to strategy classes
 MISSION_STRATEGIES = {
+    'adaptive_orbit': AdaptiveOrbitMission,
     # Add new missions here:
     # <mission_name> : <mission_class>
     # 'survey_mission': SurveyMissionStrategy,

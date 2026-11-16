@@ -1,0 +1,217 @@
+# Experimental real-sensor adaptive orbit; bench validation required before flight.
+/**:
+  ros__parameters:
+    altitude_mode: home_relative
+pcl_proc_node:
+  ros__parameters:
+    use_transform_pcl: false
+    min_sensor_range: 0.4
+    max_sensor_range: 12.0
+    voxel_leaf_size: 0.15
+    processing_period_ms: 500
+    global_frame_id: map
+    camera_offset_x: 0.0
+    camera_offset_y: 0.0
+    camera_offset_z: 0.0
+    camera_mount_roll: 0.0
+    camera_mount_pitch: 0.0
+    camera_mount_yaw: 0.0
+vision_to_mavros:
+  ros__parameters:
+    input_topic: /zed/zed_node/pose
+    output_topic: /mavros/vision_pose/pose
+    replace_zero_timestamp: true
+flight_manager:
+  ros__parameters:
+    altitude_source: rangefinder
+    hover_tolerance: 1.0
+    rangefinder_topic: /mavros/rangefinder/rangefinder
+    rangefinder_timeout: 1.0
+    rangefinder_min_valid: 0.08
+    rangefinder_max_valid: 8.0
+    rangefinder_altitude_offset: 0.0
+tree_mapper:
+  ros__parameters:
+    frame_id: map
+    merge_distance: 0.8
+    minimum_seen_count: 5
+    min_radius: 0.1
+    max_radius: 4.0
+    min_height: 1.0
+    max_height: 8.0
+    max_trunk_base_height: 3.0
+    min_cylinder_confidence: 0.25
+    position_alpha: 0.2
+    label_pohon: pohon
+mission_state_machine:
+  ros__parameters:
+    mission_mode: single_tree
+    flight_altitude: 1.9
+    pre_orbit_altitude: 2.0
+    altitude_transition_tolerance: 0.2
+    altitude_transition_hold_time: 1.5
+    approach_distance: 2.6
+    tree_distance_tolerance: 0.5
+    approach_goal_tolerance: 0.15
+    verification_retry_limit: 3
+    require_safety_monitor: false
+    auto_start: false
+    state_timeout: 300.0
+    pose_timeout: 5.0
+    post_takeoff_hover_time: 2.0
+    align_yaw_tolerance_degrees: 7.5
+    align_yaw_hold_time: 1.5
+    require_frame_alignment: false
+    require_vision_before_start: true
+    vision_pose_topic: /mavros/vision_pose/pose
+    vision_pose_timeout: 1.0
+    vision_warmup_time: 5.0
+    orbit_radius: 3.0
+    max_trees: 2
+    require_tree_ahead: true
+    virtual_tree_position_mode: toward_home
+    virtual_tree_position_x: 6.0
+    virtual_tree_position_y: 3.0
+    virtual_tree_offset_toward_home: 6.0
+    virtual_tree_id: 9001
+    abort_mode: BRAKE
+    alt_target_flower: 2.5
+    adaptive_orbit_fraction: 0.5
+    adaptive_orbit_min_height: 1.0
+    adaptive_orbit_max_height: 3.0
+    lidar_verification_timeout: 8.0
+    lidar_max_position_correction: 0.6
+dynamic_orbit_controller:
+  ros__parameters:
+    orbit_radius: 2.6
+    orbit_altitude: 1.9
+    orbit_velocity: 0.55
+    orbit_timeout: 180.0
+    radial_tolerance: 0.3
+    toleransi_radius_balik_dari_pause: 0.1
+    yaw_offset: 0.0
+    completion_tolerance_degrees: 2.0
+detect_flower:
+  ros__parameters:
+    label_bunga: bunga
+position_setpoint_controller:
+  ros__parameters:
+    publish_rate: 20.0
+    max_horizontal_step: 0.03
+    max_vertical_step: 0.05
+    target_timeout: 0.75
+    output_frame: map
+    rangefinder_topic: /mavros/rangefinder/rangefinder
+    rangefinder_timeout: 0.5
+    rangefinder_min_valid: 0.08
+    rangefinder_max_valid: 8.0
+    rangefinder_altitude_offset: 0.0
+    range_filter_alpha: 0.35
+    range_median_window: 5
+    minimum_tilt_cosine: 0.7
+    max_terrain_correction: 1.0
+    max_terrain_target_rate: 0.5
+velocity_controller:
+  ros__parameters:
+    minimum_control_altitude: 0.2
+    goal_threshold: 0.1
+mission_safety_monitor:
+  ros__parameters:
+    pointcloud_topic: ''
+    tracked_cylinders_topic: /global_cylinders
+    range_topic: /mavros/rangefinder/rangefinder
+    require_rangefinder: true
+    pose_timeout: 5.0
+    cloud_timeout: 5.0
+    state_timeout: 5.0
+    range_timeout: 5.0
+    range_arm_grace: 5.0
+    min_range: 0.08
+    max_range: 8.0
+mission_analyzer:
+  ros__parameters:
+    output_directory: ~/beehive_mission_reports/real
+    map_frame: map
+    sample_period: 0.2
+    console_period: 2.0
+    autosave_period: 10.0
+    rangefinder_topic: /mavros/rangefinder/rangefinder
+    expected_takeoff_altitude: 1.5
+    expected_approach_distance: 1.5
+    expected_orbit_radius: 1.5
+priest_dyn_node:
+  ros__parameters:
+    plan_rate_hz: 1.0
+    goal_tolerance: 0.15
+    horizon_seconds: 2.0
+    num_samples: 50
+    num_batch: 100
+    max_obstacles: 100
+    reference_samples: 300
+    cem_iterations: 13
+    publish_elite_trajectories: true
+    elite_marker_alpha: 0.2
+    elite_marker_line_width: 0.015
+    v_max: 0.9
+    v_min: 0.0
+    a_max: 1.3
+    v_des: 0.55
+    weight_smoothness: 0.025
+    weight_track: 5.0
+    weight_clearance: 0.1
+    robot_radius: 0.4
+    safety_margin: 0.2
+    goal_clearance: 0.08
+    goal_lateral_weight: 0.0
+    odom_timeout: 20.0
+    obstacle_timeout: 20.0
+    max_solve_age: 30.0
+    max_start_drift: 0.3
+    require_obstacles: false
+    device: cuda
+    seed: 0
+    is_log_CEM_progress: true
+    use_safety: false
+    reference_trajectory_states:
+    - WAIT_ORBIT
+priest_avoidance_controller:
+  ros__parameters:
+    publish_rate: 20.0
+    path_timeout: 2.0
+    waypoint_lookahead: 0.6
+    goal_republish_period: 0.5
+    minimum_obstacle_radius: 0.1
+    minimum_obstacle_half_height: 0.25
+    orbit_radius: 2.7
+    orbit_reference_points: 120
+    reference_republish_period: 0.5
+lidar_tree_verifier:
+  ros__parameters:
+    lidar_topic: /livox/top/points
+    target_frame: map
+    association_radius: 0.8
+    max_center_offset: 0.6
+    min_points: 30
+    slice_height: 0.25
+    min_slice_points: 6
+    ransac_iterations: 60
+    min_radius: 0.1
+    max_radius: 0.65
+    circle_tolerance: 0.035
+    min_inlier_ratio: 0.6
+    min_arc_coverage: 0.5
+    min_slices: 4
+    slice_center_tolerance: 0.12
+    min_vertical_span: 0.75
+    surface_tolerance: 0.06
+    bottom_percentile: 3.0
+    top_percentile: 97.0
+    min_height: 0.8
+    scan_window: 5
+    min_consistent_scans: 3
+    scan_center_tolerance: 0.15
+    max_height_variation: 0.5
+    processing_period: 0.15
+    scan_timeout: 1.0
+    candidate_timeout: 1.0
+    max_scan_gap: 1.0
