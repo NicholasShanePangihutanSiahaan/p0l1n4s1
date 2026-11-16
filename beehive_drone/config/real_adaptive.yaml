@@ -215,3 +215,7 @@ lidar_tree_verifier:
     scan_timeout: 1.0
     candidate_timeout: 1.0
     max_scan_gap: 1.0
+
+real_adaptive_orbit_launch:
+  ros__parameters:
+    use_priest: false  # true: PRIEST; false: vortex. Restart launch setelah diubah.
