@@ -13,9 +13,9 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name, ['REAL_FLIGHT.md']),
         (os.path.join('share', package_name, 'models'), glob('models/*.onnx')),
-        # DAFTARKAN FOLDER LAUNCH DI SINI:
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
+        (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

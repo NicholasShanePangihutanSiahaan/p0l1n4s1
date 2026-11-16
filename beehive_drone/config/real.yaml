@@ -27,6 +27,7 @@ vision_to_mavros:
     input_topic: /zed/zed_node/pose
     output_topic: /mavros/vision_pose/pose
     replace_zero_timestamp: true
+    is_log_receive: false
 
 flight_manager:
   ros__parameters:

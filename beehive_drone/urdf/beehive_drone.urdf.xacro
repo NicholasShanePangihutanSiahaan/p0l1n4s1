@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+
+<robot name="beehive" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <xacro:arg name="camera_name" default="zed"/>
+  <xacro:arg name="camera_model" default="zed2i"/>
+  <xacro:arg name="baseline" default="0.0"/>
+  <xacro:arg name="use_zed_localization" default="false"/>
+
+  <!-- Origin: Pixhawk IMU.
+       ROS body axes: X forward, Y left, Z up. -->
+  <link name="base_link"/>
+
+  <!-- ZED camera and its internal sensor frames.
+       This invocation matches the older macro in your example. -->
+  <xacro:include
+    filename="$(find zed_wrapper)/urdf/zed_macro.urdf.xacro"/>
+
+  <xacro:zed_camera
+    name="$(arg camera_name)"
+    model="$(arg camera_model)"
+    baseline="$(arg baseline)"/>
+
+  <!-- External localization publishes the robot's moving base pose. -->
+  <xacro:unless value="$(arg use_zed_localization)">
+    <joint name="$(arg camera_name)_mount_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="$(arg camera_name)_camera_link"/>
+      <origin xyz="0.10 0.0 0.05" rpy="0 0 0"/>
+    </joint>
+  </xacro:unless>
+
+  <!-- ZED publishes the camera's moving pose.
+       Reverse the mounting transform to attach the robot to it.
+       Negating xyz is valid here because the camera rotation is zero. -->
+  <xacro:if value="$(arg use_zed_localization)">
+    <joint name="$(arg camera_name)_mount_joint" type="fixed">
+      <parent link="$(arg camera_name)_camera_link"/>
+      <child link="base_link"/>
+      <origin xyz="-0.10 0.0 -0.05" rpy="0 0 0"/>
+    </joint>
+  </xacro:if>
+
+  <!-- Rangefinder: 10 cm backward, 5 cm below the Pixhawk.
+       Assumed beam direction: straight down. -->
+  <link name="rangefinder_link"/>
+
+  <joint name="rangefinder_mount_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rangefinder_link"/>
+    <origin
+      xyz="-0.10 0.0 -0.05"
+      rpy="0 1.57079632679 0"/>
+  </joint>
+
+  <!-- Livox: 10 cm forward, 10 cm above the Pixhawk.
+       Local +X tilted downward by 20 degrees. -->
+  <link name="livox_frame"/>
+
+  <joint name="livox_mount_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="livox_frame"/>
+    <origin
+      xyz="0.10 0.0 0.10"
+      rpy="0 0.0 0"/>
+  </joint>
+
+</robot>

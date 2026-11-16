@@ -4,11 +4,12 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
 def generate_launch_description():
@@ -20,10 +21,19 @@ def generate_launch_description():
     use_alignment = LaunchConfiguration('use_alignment')
     use_fixed_yaw_offset = LaunchConfiguration('use_fixed_yaw_offset')
     fixed_yaw_offset_degrees = LaunchConfiguration('fixed_yaw_offset_degrees')
+    xacro_path = LaunchConfiguration('xacro_path')
+    
+    default_xacro_path = os.path.join(
+        get_package_share_directory('beehive_drone'),
+        'urdf',
+        'beehive_drone.urdf.xacro',
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
-            'raw_input_topic', default_value='/zed/zed_node/pose'),
+            'raw_input_topic', default_value='/zed/zed_node/odom'),
+        DeclareLaunchArgument(
+            'xacro_drone', default_value=default_xacro_path),
         DeclareLaunchArgument(
             'input_topic', default_value='/zed/aligned_pose'),
         DeclareLaunchArgument(
@@ -70,4 +80,20 @@ def generate_launch_description():
             }],
             output='screen',
         ),
+        IncludeLaunchDescription( # ZED2i Package
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                get_package_share_directory('zed_wrapper'),
+                'launch',
+                'zed_camera.launch.py'
+            )
+        ),
+        launch_arguments={
+            'camera_name': 'zed2i',
+            'camera_model': 'zed2i',
+            'publish_urdf': 'true',
+            'xacro_path': xacro_path,
+            'publish_tf': 'false'
+        }.items()
+        )
     ])
