@@ -21,7 +21,7 @@ def generate_launch_description():
     use_alignment = LaunchConfiguration('use_alignment')
     use_fixed_yaw_offset = LaunchConfiguration('use_fixed_yaw_offset')
     fixed_yaw_offset_degrees = LaunchConfiguration('fixed_yaw_offset_degrees')
-    xacro_path = LaunchConfiguration('xacro_path')
+    xacro_path = LaunchConfiguration('xacro_drone')
     
     default_xacro_path = os.path.join(
         get_package_share_directory('beehive_drone'),
