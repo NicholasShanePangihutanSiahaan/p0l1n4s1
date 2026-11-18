@@ -22,6 +22,7 @@ def generate_launch_description():
     use_fixed_yaw_offset = LaunchConfiguration('use_fixed_yaw_offset')
     fixed_yaw_offset_degrees = LaunchConfiguration('fixed_yaw_offset_degrees')
     xacro_path = LaunchConfiguration('xacro_drone')
+    custom_config = LaunchConfiguration('custom_config')
     
     default_xacro_path = os.path.join(
         get_package_share_directory('beehive_drone'),
@@ -32,6 +33,8 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'raw_input_topic', default_value='/zed/zed_node/odom'),
+        DeclareLaunchArgument(
+            'custom_config', default_value=config),
         DeclareLaunchArgument(
             'xacro_drone', default_value=default_xacro_path),
         DeclareLaunchArgument(
@@ -89,7 +92,7 @@ def generate_launch_description():
             executable='vision_to_mavros',
             name='vision_to_mavros',
             condition=UnlessCondition(use_alignment),
-            parameters=[config, {
+            parameters=[custom_config, {
                 'input_topic': raw_input_topic,
                 'output_topic': output_topic,
             }],
