@@ -19,7 +19,9 @@
   <xacro:zed_camera
     name="$(arg camera_name)"
     model="$(arg camera_model)"
-    baseline="$(arg baseline)"/>
+    enable_gnss="false">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:zed_camera>
 
   <!-- External localization publishes the robot's moving base pose. -->
   <xacro:unless value="$(arg use_zed_localization)">

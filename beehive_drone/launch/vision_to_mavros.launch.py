@@ -104,7 +104,7 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            'camera_name': 'zed2i',
+            'camera_name': 'zed',
             'camera_model': 'zed2i',
             'publish_urdf': 'true',
             'xacro_path': xacro_path,
